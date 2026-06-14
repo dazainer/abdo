@@ -1,6 +1,7 @@
 # CLAUDE.md — Abdo
 
-Abdo (عبده) is a conversational household assistant for the Khalil family in New Cairo, Egypt. It speaks Egyptian colloquial Arabic, knows the family, and is accessed **entirely through Telegram** (no web UI or wall display yet). This file is the project's durable memory; detailed, phase-by-phase build briefs live in `docs/` — see "Build phases" below.
+
+Abdo (عبده) is a conversational household assistant for the Khalil family in New Cairo, Egypt. It speaks Egyptian colloquial Arabic, knows the family, and is accessed **entirely through Telegram** (no web UI or wall display YET). This file is the project's durable memory; detailed, phase-by-phase build briefs live in `docs/` — see "Build phases" below.
 
 ## The one principle that governs everything
 

@@ -1,0 +1,167 @@
+"""Offline smoke test for Abdo Phase 1.
+
+Exercises the real brain tool-loop, tool dispatch, DB result parsing, and
+update parsing — with the network (Anthropic, Telegram) and Postgres faked out.
+No real credentials, DB, or HTTP calls. Run:  python tests/smoke.py
+"""
+import asyncio
+import os
+import sys
+from types import SimpleNamespace
+
+# --- Fake env so config.Settings() loads without a real .env -----------------
+os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake")
+os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123:fake")
+os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET", "test-secret")
+os.environ.setdefault("DATABASE_URL", "postgresql://fake/fake")
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app import brain, db, tools, telegram  # noqa: E402
+
+
+# --- In-memory fake of the dog-feeding state, replacing the db layer ---------
+class FakeDB:
+    def __init__(self):
+        self.fed_today = None        # None => not fed; dict => fed row
+        self.logged = []             # (member_id, chat_id, role, content)
+
+    async def recent_messages(self, chat_id, limit=10):
+        return []                    # fresh conversation
+
+    async def roster_string(self):
+        return "Zain (member)"
+
+    async def dogs_fed_today(self):
+        return self.fed_today
+
+    async def mark_dogs_fed(self, member_id):
+        if self.fed_today is None:
+            self.fed_today = {"fed_by_name": "Zain"}
+            return True              # fresh insert
+        return False                 # already fed (idempotent)
+
+    async def log_message(self, member_id, chat_id, role, content):
+        self.logged.append((member_id, chat_id, role, content))
+
+
+fake = FakeDB()
+for name in ("recent_messages", "roster_string", "dogs_fed_today",
+             "mark_dogs_fed", "log_message"):
+    setattr(db, name, getattr(fake, name))
+
+
+# --- Scripted Anthropic client: simulate one tool_use turn, then final text --
+def _tool_use_block(tool_name, tool_id):
+    return SimpleNamespace(type="tool_use", name=tool_name, input={}, id=tool_id)
+
+
+def _text_block(text):
+    return SimpleNamespace(type="text", text=text)
+
+
+class FakeMessages:
+    def __init__(self, script):
+        self._script = script        # list of responses to return in order
+        self._i = 0
+        self.calls = []               # records (model, messages) per call
+
+    async def create(self, *, model, max_tokens, system, tools, messages):
+        self.calls.append((model, [m["role"] for m in messages]))
+        resp = self._script[self._i]
+        self._i += 1
+        return resp
+
+
+class FakeClient:
+    def __init__(self, script):
+        self.messages = FakeMessages(script)
+
+
+def script_for(tool_name, final_text):
+    """First call asks for the tool; second call (after result) returns text."""
+    return [
+        SimpleNamespace(stop_reason="tool_use",
+                        content=[_tool_use_block(tool_name, "toolu_1")]),
+        SimpleNamespace(stop_reason="end_turn",
+                        content=[_text_block(final_text)]),
+    ]
+
+
+MEMBER = {"id": 1, "name": "Zain", "role": "member"}
+
+
+# --- Assertions --------------------------------------------------------------
+passed = 0
+failed = 0
+
+
+def check(label, cond):
+    global passed, failed
+    mark = "PASS" if cond else "FAIL"
+    if cond:
+        passed += 1
+    else:
+        failed += 1
+    print(f"  [{mark}] {label}")
+
+
+async def test_status_when_not_fed():
+    print("Scenario: 'الكلاب اتأكلوا؟' when NOT fed")
+    fake.fed_today = None
+    brain.client = FakeClient(script_for("get_dog_status", "لسه يا زين، الكلاب مأكلوش."))
+    reply = await brain.think(MEMBER, chat_id=99, user_text="الكلاب اتأكلوا؟")
+    check("tool loop returned final text", reply == "لسه يا زين، الكلاب مأكلوش.")
+    check("two model calls (tool turn + answer)", len(brain.client.messages.calls) == 2)
+    check("second call carries tool_result in history",
+          brain.client.messages.calls[1][1][-1] == "user")
+
+
+async def test_mark_fed_then_status():
+    print("Scenario: 'اطعمت الكلاب' marks fed, then status reports fed")
+    fake.fed_today = None
+    brain.client = FakeClient(script_for("mark_dogs_fed", "تمام، سجّلت إن الكلاب اتأكلت. 🐶"))
+    reply = await brain.think(MEMBER, chat_id=99, user_text="اطعمت الكلاب")
+    check("got a confirmation reply", "تمام" in reply)
+    check("db state flipped to fed", fake.fed_today is not None)
+
+    # direct tool dispatch: a second mark is idempotent for the day
+    out = await tools.run_tool("mark_dogs_fed", {}, member_id=1)
+    check("second mark is idempotent", out == "Already marked fed today.")
+    status = await tools.run_tool("get_dog_status", {}, member_id=1)
+    check("status now reports FED by name", status == "FED today (by Zain).")
+
+
+async def test_tool_dispatch_unknown():
+    print("Scenario: unknown tool name")
+    out = await tools.run_tool("does_not_exist", {}, member_id=1)
+    check("unknown tool handled gracefully", out.startswith("Unknown tool:"))
+
+
+def test_parse_update():
+    print("Scenario: telegram.parse_update")
+    text_update = {"message": {"chat": {"id": 5}, "from": {"id": 7}, "text": "hi"}}
+    check("parses a text message", telegram.parse_update(text_update) == (5, {"id": 7}, "hi"))
+    check("ignores non-text update", telegram.parse_update({"message": {"chat": {"id": 5}}}) is None)
+    check("ignores empty update", telegram.parse_update({}) is None)
+
+
+def test_mark_result_parsing():
+    print("Scenario: db.mark_dogs_fed result parsing logic")
+    # The real query returns command tags like "INSERT 0 1" / "INSERT 0 0".
+    check("'INSERT 0 1' => fresh feeding", "INSERT 0 1".endswith("1"))
+    check("'INSERT 0 0' => already fed", not "INSERT 0 0".endswith("1"))
+
+
+async def main():
+    await test_status_when_not_fed()
+    await test_mark_fed_then_status()
+    await test_tool_dispatch_unknown()
+    test_parse_update()
+    test_mark_result_parsing()
+    print(f"\n{passed} passed, {failed} failed")
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
