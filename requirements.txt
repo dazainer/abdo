@@ -3,4 +3,6 @@ uvicorn[standard]
 httpx
 anthropic
 asyncpg
+pgvector
+cohere
 pydantic-settings

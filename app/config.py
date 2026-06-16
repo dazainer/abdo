@@ -7,7 +7,8 @@ class Settings(BaseSettings):
     anthropic_api_key: str
     telegram_bot_token: str
     telegram_webhook_secret: str    # random string used in the webhook URL path
-    database_url: str               # Railway injects this automatically
+    database_url: str               # set on the app service as a reference: ${{Postgres.DATABASE_URL}}
+    cohere_api_key: str | None = None  # Cohere Embed v4 for the household knowledge base (Phase 2)
     timezone: str = "Africa/Cairo"
 
 

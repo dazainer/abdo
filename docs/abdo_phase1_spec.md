@@ -177,7 +177,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str
     telegram_bot_token: str
     telegram_webhook_secret: str    # random string used in the webhook URL path
-    database_url: str               # Railway injects this automatically
+    database_url: str               # set on the app service as a reference: ${{Postgres.DATABASE_URL}}
     timezone: str = "Africa/Cairo"
 
 
@@ -507,7 +507,7 @@ web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ANTHROPIC_API_KEY=sk-ant-...
 TELEGRAM_BOT_TOKEN=123456:ABC...
 TELEGRAM_WEBHOOK_SECRET=some-long-random-string
-DATABASE_URL=postgresql://...      # Railway injects this for you
+DATABASE_URL=postgresql://...      # on Railway, set as a reference: ${{Postgres.DATABASE_URL}} (not auto-shared)
 TIMEZONE=Africa/Cairo
 ```
 
@@ -516,7 +516,7 @@ Steps:
 1. **Create the bot** — talk to `@BotFather`, get the token.
 2. **Get your Telegram user id** — message `@userinfobot`.
 3. **Push** the repo to GitHub.
-4. **Railway** → new project → deploy from the repo → add a **Postgres** database (one click; `DATABASE_URL` is injected automatically).
+4. **Railway** → new project → deploy from the repo → add a **Postgres** database (one click). Railway does **not** auto-share the DB URL with the app service: on the **app** service, add `DATABASE_URL` as a reference variable → `${{Postgres.DATABASE_URL}}` (the service name must match your Postgres service exactly, or it resolves to an empty host and asyncpg crashes at startup). If private networking (`*.railway.internal`) won't connect, use `${{Postgres.DATABASE_PUBLIC_URL}}` instead.
 5. Set the env vars (`ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TIMEZONE`).
 6. **Run `schema.sql`** against the database (Railway's query console or `psql`).
 7. **Seed yourself** as the first family member:

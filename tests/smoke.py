@@ -11,13 +11,14 @@ from types import SimpleNamespace
 
 # --- Fake env so config.Settings() loads without a real .env -----------------
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake")
+os.environ.setdefault("COHERE_API_KEY", "co-fake")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123:fake")
 os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET", "test-secret")
 os.environ.setdefault("DATABASE_URL", "postgresql://fake/fake")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import brain, db, tools, telegram  # noqa: E402
+from app import brain, db, tools, telegram, embeddings  # noqa: E402
 
 
 # --- In-memory fake of the dog-feeding state, replacing the db layer ---------
@@ -25,6 +26,7 @@ class FakeDB:
     def __init__(self):
         self.fed_today = None        # None => not fed; dict => fed row
         self.logged = []             # (member_id, chat_id, role, content)
+        self.facts = []              # stored household facts
 
     async def recent_messages(self, chat_id, limit=10):
         return []                    # fresh conversation
@@ -44,11 +46,30 @@ class FakeDB:
     async def log_message(self, member_id, chat_id, role, content):
         self.logged.append((member_id, chat_id, role, content))
 
+    async def add_fact(self, category, content, embedding, created_by):
+        self.facts.append({"category": category, "content": content})
+
+    async def search_facts(self, embedding, k=4):
+        # Embedding is faked, so just return what's stored (most-recent first).
+        return list(reversed(self.facts))[:k]
+
 
 fake = FakeDB()
 for name in ("recent_messages", "roster_string", "dogs_fed_today",
-             "mark_dogs_fed", "log_message"):
+             "mark_dogs_fed", "log_message", "add_fact", "search_facts"):
     setattr(db, name, getattr(fake, name))
+
+
+# --- Fake embeddings: record input_type so we can assert store/recall asymmetry --
+embed_calls = []
+
+
+async def fake_embed(text, *, input_type):
+    embed_calls.append(input_type)
+    return [0.0] * embeddings.EMBED_DIM   # right shape, content irrelevant to fakes
+
+
+embeddings.embed = fake_embed
 
 
 # --- Scripted Anthropic client: simulate one tool_use turn, then final text --
@@ -132,6 +153,38 @@ async def test_mark_fed_then_status():
     check("status now reports FED by name", status == "FED today (by Zain).")
 
 
+async def test_remember_and_recall_fact():
+    print("Scenario: store a household fact, then recall it (RAG tools)")
+    fake.facts.clear()
+    embed_calls.clear()
+
+    # 'الواي فاي بتاعنا الباسورد بتاعه ...' -> Claude calls remember_fact
+    brain.client = FakeClient([
+        SimpleNamespace(stop_reason="tool_use", content=[
+            SimpleNamespace(type="tool_use", name="remember_fact",
+                            input={"content": "The wifi password is khalil2024.",
+                                   "category": "wifi"}, id="t1")]),
+        SimpleNamespace(stop_reason="end_turn",
+                        content=[_text_block("تمام، حفظت الباسورد.")]),
+    ])
+    await brain.think(MEMBER, chat_id=99, user_text="الواي فاي الباسورد khalil2024")
+    check("fact persisted", len(fake.facts) == 1 and fake.facts[0]["category"] == "wifi")
+    check("stored with input_type=search_document", embed_calls == ["search_document"])
+
+    # Now recall it (cross-lingual: English question).
+    embed_calls.clear()
+    out = await tools.run_tool("recall_facts", {"query": "what's the wifi password"}, member_id=1)
+    check("recall returns the stored fact", "khalil2024" in out and "[wifi]" in out)
+    check("recall used input_type=search_query", embed_calls == ["search_query"])
+
+
+async def test_recall_empty():
+    print("Scenario: recall with nothing stored")
+    fake.facts.clear()
+    out = await tools.run_tool("recall_facts", {"query": "anything"}, member_id=1)
+    check("honest 'no facts' when store is empty", out == "No matching household facts found.")
+
+
 async def test_tool_dispatch_unknown():
     print("Scenario: unknown tool name")
     out = await tools.run_tool("does_not_exist", {}, member_id=1)
@@ -156,6 +209,8 @@ def test_mark_result_parsing():
 async def main():
     await test_status_when_not_fed()
     await test_mark_fed_then_status()
+    await test_remember_and_recall_fact()
+    await test_recall_empty()
     await test_tool_dispatch_unknown()
     test_parse_update()
     test_mark_result_parsing()

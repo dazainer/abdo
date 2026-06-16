@@ -1,12 +1,20 @@
 import asyncpg
+from pgvector.asyncpg import register_vector
 from app.config import settings
 
 _pool: asyncpg.Pool | None = None
 
 
+async def _init_conn(con):
+    # Teach asyncpg the pgvector `vector` type so we can pass Python lists straight through.
+    await register_vector(con)
+
+
 async def init_pool() -> None:
     global _pool
-    _pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=5)
+    _pool = await asyncpg.create_pool(
+        settings.database_url, min_size=1, max_size=5, init=_init_conn
+    )
 
 
 async def close_pool() -> None:
@@ -67,3 +75,23 @@ async def mark_dogs_fed(member_id: int) -> bool:
             member_id,
         )
     return result.endswith("1")   # "INSERT 0 1" => newly inserted
+
+
+# --- household knowledge base (Phase 2) ---
+
+async def add_fact(category, content, embedding, created_by) -> None:
+    async with _pool.acquire() as con:
+        await con.execute(
+            "INSERT INTO household_facts (category, content, embedding, created_by) "
+            "VALUES ($1, $2, $3, $4)",
+            category, content, embedding, created_by,   # embedding is a plain list
+        )
+
+
+async def search_facts(embedding, k: int = 4):
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT category, content, embedding <=> $1 AS distance "
+            "FROM household_facts ORDER BY embedding <=> $1 LIMIT $2",
+            embedding, k,
+        )
