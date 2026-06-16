@@ -1,13 +1,35 @@
 import asyncio
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app import db, embeddings, calendar_svc, geo
 from app.config import settings
 
 
-def _local_hhmm(ts) -> str:
-    """Render a TIMESTAMPTZ (UTC-aware from asyncpg) as Cairo HH:MM."""
-    return ts.astimezone(ZoneInfo(settings.timezone)).strftime("%H:%M")
+def _location_freshness(ts) -> str:
+    """Render a location timestamp as Cairo local time plus a computed age.
+
+    asyncpg returns TIMESTAMPTZ as UTC-aware datetimes; the *display* must be
+    Cairo (CLAUDE.md gotcha). We also compute the age here so the model never
+    has to guess how long ago it was — a bare HH:MM made Haiku invent things
+    like "a few minutes ago". Naive inputs (tests) are treated as Cairo-local.
+    """
+    tz = ZoneInfo(settings.timezone)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=tz)
+    local = ts.astimezone(tz)
+    mins = max(0, (datetime.now(tz) - local).total_seconds()) / 60
+    if mins < 2:
+        age = "just now"
+    elif mins < 60:
+        age = f"{int(mins)} min ago"
+    elif mins < 24 * 60:
+        age = f"~{int(mins // 60)}h ago"
+    else:
+        age = f"~{int(mins // (24 * 60))}d ago"
+    clock = local.strftime("%H:%M" if local.date() == datetime.now(tz).date()
+                            else "%d %b %H:%M")
+    return f"{clock} ({age})"
 
 TOOLS = [
     {
@@ -133,6 +155,50 @@ TOOLS = [
             "required": ["name"],
         },
     },
+    {
+        "name": "add_to_shopping_list",
+        "description": (
+            "Add an item to the shared household shopping list. Use when someone says "
+            "to buy/get something or to put it on the list (e.g. 'add milk', 'we need bread'). "
+            "Add one item per call; call it multiple times for several items."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "item": {"type": "string", "description": "The thing to buy, e.g. 'milk', 'bread'."},
+                "qty": {"type": "string", "description": "Optional amount, free text, e.g. '2 kilo', 'a dozen'."},
+            },
+            "required": ["item"],
+        },
+    },
+    {
+        "name": "get_shopping_list",
+        "description": (
+            "Show the current shared shopping list (items still to buy). Use for "
+            "'what's on the list', 'what do we need', 'what should I get'."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "mark_item_bought",
+        "description": (
+            "Mark one item on the shopping list as bought, removing it from the open list. "
+            "Use when someone says they got/bought a specific item."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"item": {"type": "string", "description": "The item that was bought."}},
+            "required": ["item"],
+        },
+    },
+    {
+        "name": "clear_shopping_list",
+        "description": (
+            "Clear the whole shopping list at once (mark everything bought). Use when someone "
+            "says the shopping is done / they got everything. Confirm before clearing."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 
@@ -201,12 +267,36 @@ async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
             if not rows:
                 return "No one is sharing their location right now."
             return "\n".join(
-                f"{r['name']}: {geo.describe(r['lat'], r['lng'])} (updated {_local_hhmm(r['updated_at'])})"
+                f"{r['name']}: {geo.describe(r['lat'], r['lng'])} (updated {_location_freshness(r['updated_at'])})"
                 for r in rows
             )
         row = await db.get_location(who)
         if not row:
             return f"{who} isn't sharing a location right now."
-        return f"{row['name']}: {geo.describe(row['lat'], row['lng'])} (updated {_local_hhmm(row['updated_at'])})"
+        return f"{row['name']}: {geo.describe(row['lat'], row['lng'])} (updated {_location_freshness(row['updated_at'])})"
+
+    if name == "add_to_shopping_list":
+        added = await db.add_shopping_item(tool_input["item"], tool_input.get("qty"), member_id)
+        if added:
+            return f"Added '{tool_input['item']}' to the shopping list."
+        return f"'{tool_input['item']}' is already on the list."
+
+    if name == "get_shopping_list":
+        rows = await db.get_shopping_list()
+        if not rows:
+            return "The shopping list is empty."
+        return "\n".join(
+            f"- {r['item']}" + (f" ({r['qty']})" if r["qty"] else "") for r in rows
+        )
+
+    if name == "mark_item_bought":
+        got = await db.mark_item_bought(tool_input["item"], member_id)
+        if got:
+            return f"Marked '{got}' as bought (removed from the list)."
+        return f"'{tool_input['item']}' isn't on the list."
+
+    if name == "clear_shopping_list":
+        n = await db.clear_shopping_list(member_id)
+        return f"Cleared {n} item(s) from the shopping list." if n else "The list was already empty."
 
     return f"Unknown tool: {name}"

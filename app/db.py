@@ -124,3 +124,48 @@ async def get_all_locations():
             "SELECT m.name, l.lat, l.lng, l.updated_at "
             "FROM member_locations l JOIN family_members m ON m.id = l.member_id"
         )
+
+
+# --- shared shopping list ---
+
+async def add_shopping_item(item, qty, member_id) -> bool:
+    """Add to the shared list. Returns False if an open entry already exists
+    (guarded by the partial unique index on lower(item) WHERE NOT bought)."""
+    async with _pool.acquire() as con:
+        try:
+            await con.execute(
+                "INSERT INTO shopping_items (item, qty, added_by) VALUES ($1, $2, $3)",
+                item, qty, member_id,
+            )
+            return True
+        except asyncpg.UniqueViolationError:
+            return False
+
+
+async def get_shopping_list():
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT item, qty FROM shopping_items WHERE NOT bought ORDER BY created_at"
+        )
+
+
+async def mark_item_bought(item, member_id):
+    """Mark the matching open item bought. Returns the stored item name, or None."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "UPDATE shopping_items SET bought = true, bought_by = $2, bought_at = now() "
+            "WHERE lower(item) = lower($1) AND NOT bought RETURNING item",
+            item, member_id,
+        )
+    return row["item"] if row else None
+
+
+async def clear_shopping_list(member_id) -> int:
+    """Mark every open item bought. Returns how many were cleared."""
+    async with _pool.acquire() as con:
+        result = await con.execute(
+            "UPDATE shopping_items SET bought = true, bought_by = $1, bought_at = now() "
+            "WHERE NOT bought",
+            member_id,
+        )
+    return int(result.split()[-1])   # "UPDATE 3" -> 3

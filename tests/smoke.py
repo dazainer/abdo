@@ -62,13 +62,38 @@ class FakeDB:
     async def get_all_locations(self):
         return list(self._loc_rows.values())
 
+    async def add_shopping_item(self, item, qty, member_id):
+        if any(s["item"].lower() == item.lower() and not s["bought"] for s in self.shopping):
+            return False
+        self.shopping.append({"item": item, "qty": qty, "bought": False})
+        return True
+
+    async def get_shopping_list(self):
+        return [s for s in self.shopping if not s["bought"]]
+
+    async def mark_item_bought(self, item, member_id):
+        for s in self.shopping:
+            if s["item"].lower() == item.lower() and not s["bought"]:
+                s["bought"] = True
+                return s["item"]
+        return None
+
+    async def clear_shopping_list(self, member_id):
+        n = sum(1 for s in self.shopping if not s["bought"])
+        for s in self.shopping:
+            s["bought"] = True
+        return n
+
 
 fake = FakeDB()
+fake.shopping = []       # list of {item, qty, bought}
 fake.locations = {}      # member_id -> (lat, lng), written by upsert
 fake._loc_rows = {}      # name.lower() -> asyncpg-style row dict, for reads
 for name in ("recent_messages", "roster_string", "dogs_fed_today",
              "mark_dogs_fed", "log_message", "add_fact", "search_facts",
-             "upsert_location", "get_location", "get_all_locations"):
+             "upsert_location", "get_location", "get_all_locations",
+             "add_shopping_item", "get_shopping_list", "mark_item_bought",
+             "clear_shopping_list"):
     setattr(db, name, getattr(fake, name))
 
 
@@ -85,7 +110,7 @@ embeddings.embed = fake_embed
 
 
 # --- Fake calendar + a real home coordinate for the geofence ------------------
-from datetime import datetime  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
 from app import calendar_svc, geo  # noqa: E402
 from app.config import settings  # noqa: E402
 
@@ -250,6 +275,14 @@ async def test_where_is():
     out = await tools.run_tool("where_is", {"name": "everyone"}, member_id=1)
     check("'everyone' lists all sharers", "Zain" in out and "Omar" in out)
 
+    # A stale reading (sharing stopped hours ago) must show a computed age,
+    # not a bare clock the model can mis-narrate as "a few minutes ago".
+    stale = datetime.now(timezone.utc) - timedelta(hours=9)   # aware, like asyncpg
+    fake._loc_rows = {"zain": {"name": "Zain", "lat": 30.0, "lng": 31.0, "updated_at": stale}}
+    out = await tools.run_tool("where_is", {"name": "Zain"}, member_id=1)
+    check("stale reading carries an age, not a bare time", "ago" in out)
+    check("stale reading shows ~hours, not minutes", "~9h ago" in out)
+
     fake._loc_rows = {}
     out = await tools.run_tool("where_is", {"name": "Zain"}, member_id=1)
     check("not-sharing handled", "isn't sharing" in out)
@@ -295,6 +328,38 @@ async def test_calendar_write():
     out = await tools.run_tool("delete_event", {"event_id": "evt_new"}, member_id=1)
     check("delete confirms removal", out == "Deleted the event.")
     check("delete actually called the calendar", _deleted_events == ["evt_new"])
+
+
+async def test_shopping_list():
+    print("Scenario: shared shopping list (add / view / buy / clear)")
+    fake.shopping = []
+
+    out = await tools.run_tool("get_shopping_list", {}, member_id=1)
+    check("empty list reads empty", out == "The shopping list is empty.")
+
+    out = await tools.run_tool("add_to_shopping_list", {"item": "milk", "qty": "2 kilo"}, member_id=1)
+    check("add confirms the item", "milk" in out and "Added" in out)
+    await tools.run_tool("add_to_shopping_list", {"item": "bread"}, member_id=1)
+
+    out = await tools.run_tool("add_to_shopping_list", {"item": "Milk"}, member_id=1)
+    check("duplicate (case-insensitive) rejected", "already on the list" in out)
+
+    out = await tools.run_tool("get_shopping_list", {}, member_id=1)
+    check("list shows both items", "milk" in out and "bread" in out)
+    check("quantity rendered when present", "(2 kilo)" in out)
+
+    out = await tools.run_tool("mark_item_bought", {"item": "milk"}, member_id=1)
+    check("marking bought confirms", "milk" in out and "bought" in out)
+    out = await tools.run_tool("get_shopping_list", {}, member_id=1)
+    check("bought item leaves the open list", "milk" not in out and "bread" in out)
+
+    out = await tools.run_tool("mark_item_bought", {"item": "eggs"}, member_id=1)
+    check("buying an absent item is honest", "isn't on the list" in out)
+
+    out = await tools.run_tool("clear_shopping_list", {}, member_id=1)
+    check("clear reports the count", "Cleared 1 item" in out)
+    out = await tools.run_tool("get_shopping_list", {}, member_id=1)
+    check("list empty after clear", out == "The shopping list is empty.")
 
 
 async def test_tool_loop_terminates():
@@ -358,6 +423,7 @@ async def main():
     await test_where_is()
     await test_get_calendar()
     await test_calendar_write()
+    await test_shopping_list()
     await test_tool_loop_terminates()
     await test_tool_dispatch_unknown()
     test_parse_update()

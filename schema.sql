@@ -56,6 +56,20 @@ CREATE TABLE member_locations (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Shared shopping list: everyone contributes; "open" = not yet bought.
+CREATE TABLE shopping_items (
+    id          BIGSERIAL PRIMARY KEY,
+    item        TEXT NOT NULL,
+    qty         TEXT,                            -- free text, optional ("2 kilo")
+    added_by    INTEGER REFERENCES family_members(id),
+    bought      BOOLEAN NOT NULL DEFAULT false,
+    bought_by   INTEGER REFERENCES family_members(id),
+    bought_at   TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- At most one open (unbought) entry per item name, case-insensitive.
+CREATE UNIQUE INDEX uniq_open_shopping_item ON shopping_items (lower(item)) WHERE NOT bought;
+
 -- Reminders / nudges (future)
 CREATE TABLE reminders (
     id          BIGSERIAL PRIMARY KEY,
