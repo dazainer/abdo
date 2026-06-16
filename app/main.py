@@ -6,10 +6,17 @@ from app import db, telegram, brain
 
 # Bump this with each deploy-worth change. Surfaced at GET / so we can confirm
 # from outside exactly which code Railway is actually running.
-VERSION = "2026-06-16-loc-freshness+shopping"
+VERSION = "2026-06-16-history-freshness+logfix"
 
+# uvicorn doesn't attach a handler to the root logger, so a bare getLogger()
+# at INFO emits nothing. Attach our own handler so app logs actually appear.
 log = logging.getLogger("abdo")
+if not log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(levelname)s:abdo: %(message)s"))
+    log.addHandler(_h)
 log.setLevel(logging.INFO)
+log.propagate = False
 
 
 @asynccontextmanager
