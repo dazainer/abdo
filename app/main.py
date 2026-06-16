@@ -6,7 +6,7 @@ from app import db, telegram, brain
 
 # Bump this with each deploy-worth change. Surfaced at GET / so we can confirm
 # from outside exactly which code Railway is actually running.
-VERSION = "2026-06-16-location-tense"
+VERSION = "2026-06-16-voice-lens+graceful-degrade"
 
 # uvicorn doesn't attach a handler to the root logger, so a bare getLogger()
 # at INFO emits nothing. Attach our own handler so app logs actually appear.
@@ -69,7 +69,13 @@ async def telegram_webhook(
     text = parsed["text"]
     await telegram.send_typing(chat_id)
     await db.log_message(member["id"], chat_id, "user", text)
-    reply = await brain.think(member, chat_id, text)
-    await db.log_message(member["id"], chat_id, "assistant", reply)
+    try:
+        reply = await brain.think(member, chat_id, text)
+        await db.log_message(member["id"], chat_id, "assistant", reply)
+    except Exception:
+        # Never go silent or 500 (which makes Telegram retry and duplicate).
+        # Reply honestly and return 200 so the update isn't redelivered.
+        log.exception("brain.think failed for chat %s", chat_id)
+        reply = "آسف، حصلت مشكلة عندي دلوقتي. جرّب تاني بعد شوية 🙏"
     await telegram.send_message(chat_id, reply)
     return {"ok": True}

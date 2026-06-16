@@ -364,6 +364,27 @@ async def test_shopping_list():
     check("list empty after clear", out == "The shopping list is empty.")
 
 
+async def test_tool_failure_degrades():
+    print("Scenario: a failing tool degrades honestly (no crash, no silence)")
+    # Simulate a broken tool (bad calendar id / Cohere down): run_tool raises.
+    real_run_tool = brain.run_tool
+
+    async def boom(name, tool_input, member_id):
+        raise RuntimeError("calendar 404")
+
+    brain.run_tool = boom
+    try:
+        brain.client = FakeClient(script_for(
+            "get_calendar", "آسف، مش عارف أوصل للتقويم دلوقتي."))
+        reply = await brain.think(MEMBER, chat_id=99, user_text="عندنا إيه الجمعة؟")
+        check("tool exception does not crash the loop", isinstance(reply, str) and reply)
+        # The model's turn after the failure must have received an ERROR result.
+        last = brain.client.messages.calls[-1]
+        check("model was given an error tool_result to react to", last[1][-1] == "user")
+    finally:
+        brain.run_tool = real_run_tool
+
+
 async def test_tool_loop_terminates():
     print("Scenario: tool loop is bounded (no infinite loop)")
 
@@ -426,6 +447,7 @@ async def main():
     await test_get_calendar()
     await test_calendar_write()
     await test_shopping_list()
+    await test_tool_failure_degrades()
     await test_tool_loop_terminates()
     await test_tool_dispatch_unknown()
     test_parse_update()

@@ -43,7 +43,17 @@ async def think(member, chat_id: int, user_text: str) -> str:
             results = []
             for block in resp.content:
                 if block.type == "tool_use":
-                    out = await run_tool(block.name, block.input, member["id"])
+                    try:
+                        out = await run_tool(block.name, block.input, member["id"])
+                    except Exception:
+                        # A failing tool (bad calendar id, Cohere/Google down) must
+                        # not crash the webhook or go silent. Hand the model an
+                        # honest error so it degrades to "couldn't reach X" instead
+                        # of pretending it worked.
+                        log.exception("tool %s(%s) raised", block.name, block.input)
+                        out = (f"ERROR: the '{block.name}' tool failed and could not "
+                               f"complete. Tell the user plainly you couldn't do it "
+                               f"right now; do NOT pretend it worked.")
                     # Ground truth for debugging: what the tool actually returned,
                     # so we can tell a tool bug from the model mis-narrating it.
                     log.info("tool %s(%s) -> %r", block.name, block.input, out)
