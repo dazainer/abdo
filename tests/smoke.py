@@ -261,27 +261,29 @@ async def test_recall_empty():
 
 
 async def test_where_is():
-    print("Scenario: where_is (live location + geofence)")
-    t = datetime(2026, 6, 16, 14, 30)
-    # Zain exactly at home; Omar ~3km away.
+    print("Scenario: where_is (geofence + fresh/stale tense)")
+    now = datetime.now(timezone.utc)             # aware, like asyncpg returns
+    fresh = now - timedelta(minutes=2)
+    # Zain exactly at home; Omar ~3km away — both freshly updated.
     fake._loc_rows = {
-        "zain": {"name": "Zain", "lat": 30.0000, "lng": 31.0000, "updated_at": t},
-        "omar": {"name": "Omar", "lat": 30.0270, "lng": 31.0000, "updated_at": t},
+        "zain": {"name": "Zain", "lat": 30.0000, "lng": 31.0000, "updated_at": fresh},
+        "omar": {"name": "Omar", "lat": 30.0270, "lng": 31.0000, "updated_at": fresh},
     }
     out = await tools.run_tool("where_is", {"name": "Zain"}, member_id=1)
-    check("member at home reads 'home'", "Zain: home" in out and "14:30" in out)
+    check("fresh reading is present tense 'is home'", "Zain is home" in out and "live" in out)
     out = await tools.run_tool("where_is", {"name": "Omar"}, member_id=1)
     check("member away reads distance", "km from home" in out)
     out = await tools.run_tool("where_is", {"name": "everyone"}, member_id=1)
     check("'everyone' lists all sharers", "Zain" in out and "Omar" in out)
 
-    # A stale reading (sharing stopped hours ago) must show a computed age,
-    # not a bare clock the model can mis-narrate as "a few minutes ago".
-    stale = datetime.now(timezone.utc) - timedelta(hours=9)   # aware, like asyncpg
+    # A stale reading (sharing stopped hours ago) must flip to PAST tense and
+    # flag itself stale, so the model can't claim they're there now.
+    stale = now - timedelta(hours=9)
     fake._loc_rows = {"zain": {"name": "Zain", "lat": 30.0, "lng": 31.0, "updated_at": stale}}
     out = await tools.run_tool("where_is", {"name": "Zain"}, member_id=1)
-    check("stale reading carries an age, not a bare time", "ago" in out)
-    check("stale reading shows ~hours, not minutes", "~9h ago" in out)
+    check("stale reading is past tense 'was home'", "Zain was home" in out)
+    check("stale reading flagged stale with age", "stale" in out and "~9h ago" in out)
+    check("stale reading hedges current whereabouts", "may not be there now" in out)
 
     fake._loc_rows = {}
     out = await tools.run_tool("where_is", {"name": "Zain"}, member_id=1)

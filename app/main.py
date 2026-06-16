@@ -6,7 +6,7 @@ from app import db, telegram, brain
 
 # Bump this with each deploy-worth change. Surfaced at GET / so we can confirm
 # from outside exactly which code Railway is actually running.
-VERSION = "2026-06-16-history-freshness+logfix"
+VERSION = "2026-06-16-location-tense"
 
 # uvicorn doesn't attach a handler to the root logger, so a bare getLogger()
 # at INFO emits nothing. Attach our own handler so app logs actually appear.

@@ -6,30 +6,43 @@ from app import db, embeddings, calendar_svc, geo
 from app.config import settings
 
 
-def _location_freshness(ts) -> str:
-    """Render a location timestamp as Cairo local time plus a computed age.
+# Past this many minutes since the last ping, a live-location share has almost
+# certainly stopped (active shares stream every few seconds), so the reading is
+# stale: report it in the past tense, not as where the person is right now.
+LOCATION_STALE_MINUTES = 15
 
-    asyncpg returns TIMESTAMPTZ as UTC-aware datetimes; the *display* must be
-    Cairo (CLAUDE.md gotcha). We also compute the age here so the model never
-    has to guess how long ago it was — a bare HH:MM made Haiku invent things
-    like "a few minutes ago". Naive inputs (tests) are treated as Cairo-local.
+
+def _human_age(mins: float) -> str:
+    if mins < 2:
+        return "just now"
+    if mins < 60:
+        return f"{int(mins)} min ago"
+    if mins < 24 * 60:
+        return f"~{int(mins // 60)}h ago"
+    return f"~{int(mins // (24 * 60))}d ago"
+
+
+def _describe_location(name, lat, lng, ts) -> str:
+    """One self-describing clause per member, with the tense baked in.
+
+    asyncpg returns TIMESTAMPTZ as UTC-aware datetimes; display must be Cairo
+    (CLAUDE.md gotcha). We decide fresh-vs-stale here so the model never narrates
+    an hours-old reading as where someone is *now* — it just relays our wording.
+    Naive inputs (tests) are treated as Cairo-local.
     """
+    place = geo.describe(lat, lng)            # "home" or "3.2 km from home"
     tz = ZoneInfo(settings.timezone)
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=tz)
     local = ts.astimezone(tz)
-    mins = max(0, (datetime.now(tz) - local).total_seconds()) / 60
-    if mins < 2:
-        age = "just now"
-    elif mins < 60:
-        age = f"{int(mins)} min ago"
-    elif mins < 24 * 60:
-        age = f"~{int(mins // 60)}h ago"
-    else:
-        age = f"~{int(mins // (24 * 60))}d ago"
-    clock = local.strftime("%H:%M" if local.date() == datetime.now(tz).date()
-                            else "%d %b %H:%M")
-    return f"{clock} ({age})"
+    now = datetime.now(tz)
+    mins = max(0, (now - local).total_seconds()) / 60
+    age = _human_age(mins)
+    if mins <= LOCATION_STALE_MINUTES:
+        return f"{name} is {place} (live, updated {age})"
+    clock = local.strftime("%H:%M" if local.date() == now.date() else "%d %b %H:%M")
+    return (f"{name} was {place} as of {clock} ({age}); this reading is stale — "
+            f"sharing looks off, so {name} may not be there now")
 
 TOOLS = [
     {
@@ -267,13 +280,13 @@ async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
             if not rows:
                 return "No one is sharing their location right now."
             return "\n".join(
-                f"{r['name']}: {geo.describe(r['lat'], r['lng'])} (updated {_location_freshness(r['updated_at'])})"
+                _describe_location(r["name"], r["lat"], r["lng"], r["updated_at"])
                 for r in rows
             )
         row = await db.get_location(who)
         if not row:
             return f"{who} isn't sharing a location right now."
-        return f"{row['name']}: {geo.describe(row['lat'], row['lng'])} (updated {_location_freshness(row['updated_at'])})"
+        return _describe_location(row["name"], row["lat"], row["lng"], row["updated_at"])
 
     if name == "add_to_shopping_list":
         added = await db.add_shopping_item(tool_input["item"], tool_input.get("qty"), member_id)
