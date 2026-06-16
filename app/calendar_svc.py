@@ -66,7 +66,12 @@ def create_event(summary: str, start: str, end: str | None = None):
 
 def update_event(event_id: str, summary: str | None = None,
                  start: str | None = None, end: str | None = None):
-    """Patch an existing event by id. Only the provided fields change. Blocking."""
+    """Patch an existing event by id. Only the provided fields change.
+
+    Moving an event (new start, no end given) preserves its original duration —
+    we read the existing event, measure its length, and shift the end to match,
+    so a 5-hour event stays 5 hours instead of collapsing to a default. Blocking.
+    """
     service = _get_service()
     tz = settings.timezone
     body: dict = {}
@@ -74,12 +79,23 @@ def update_event(event_id: str, summary: str | None = None,
         body["summary"] = summary
     if start is not None:
         body["start"] = {"dateTime": start, "timeZone": tz}
+        if end is None:
+            existing = service.events().get(
+                calendarId=settings.google_calendar_id, eventId=event_id
+            ).execute()
+            old_start = existing.get("start", {}).get("dateTime")
+            old_end = existing.get("end", {}).get("dateTime")
+            if old_start and old_end:  # timed event — keep its length on the move
+                duration = datetime.fromisoformat(old_end) - datetime.fromisoformat(old_start)
+                new_end = datetime.fromisoformat(start) + duration
+                body["end"] = {"dateTime": new_end.isoformat(), "timeZone": tz}
     if end is not None:
         body["end"] = {"dateTime": end, "timeZone": tz}
     ev = service.events().patch(
         calendarId=settings.google_calendar_id, eventId=event_id, body=body
     ).execute()
-    return {"id": ev["id"], "summary": ev.get("summary"), "start": ev["start"].get("dateTime")}
+    return {"id": ev["id"], "summary": ev.get("summary"),
+            "start": ev["start"].get("dateTime"), "end": ev["end"].get("dateTime")}
 
 
 def delete_event(event_id: str) -> None:

@@ -106,7 +106,8 @@ def fake_create_event(summary, start, end=None):
 
 def fake_update_event(event_id, summary=None, start=None, end=None):
     return {"id": event_id, "summary": summary or "Family Gathering",
-            "start": start or "2026-06-17T19:00:00"}
+            "start": start or "2026-06-17T19:00:00",
+            "end": end or "2026-06-17T20:00:00"}
 
 
 _deleted_events = []

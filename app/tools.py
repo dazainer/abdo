@@ -83,7 +83,10 @@ TOOLS = [
         "name": "update_event",
         "description": (
             "Change an existing calendar event (title or time). Get the event's id from "
-            "get_calendar first. Only call AFTER the person confirms the change."
+            "get_calendar first. Only call AFTER the person confirms the change. "
+            "To reschedule/move an event, pass only the new 'start' — the event keeps its "
+            "original length automatically. Pass 'end' ONLY if the person explicitly wants a "
+            "different end time or duration."
         ),
         "input_schema": {
             "type": "object",
@@ -91,7 +94,8 @@ TOOLS = [
                 "event_id": {"type": "string", "description": "The id of the event to change (from get_calendar)."},
                 "summary": {"type": "string", "description": "New title, if changing it."},
                 "start": {"type": "string", "description": "New start (ISO 8601 Cairo local time), if changing it."},
-                "end": {"type": "string", "description": "New end (ISO 8601 Cairo local time), if changing it."},
+                "end": {"type": "string",
+                        "description": "New end (ISO 8601 Cairo local time). Omit when only moving the event — duration is preserved."},
             },
             "required": ["event_id"],
         },
@@ -175,7 +179,7 @@ async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
             tool_input["event_id"], tool_input.get("summary"),
             tool_input.get("start"), tool_input.get("end"),
         )
-        return f"Updated: {ev['start']} {ev['summary']} (id: {ev['id']})."
+        return f"Updated: {ev['summary']} now {ev['start']} to {ev['end']} (id: {ev['id']})."
 
     if name == "delete_event":
         if not calendar_svc.is_configured():
