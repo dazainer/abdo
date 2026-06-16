@@ -17,8 +17,20 @@ async def send_typing(chat_id: int) -> None:
 
 
 def parse_update(update: dict):
-    """Return (chat_id, from_user, text) for plain text messages, else None."""
-    msg = update.get("message")
-    if not msg or "text" not in msg:
-        return None  # ignore non-text updates (photos, voice, etc.) for now
-    return msg["chat"]["id"], msg["from"], msg["text"]
+    """Return a typed payload dict, or None for updates we ignore.
+
+    {"kind": "text", "chat_id", "from_user", "text"}
+    {"kind": "location", "chat_id", "from_user", "lat", "lng"}
+
+    Live-location updates arrive as `edited_message`, so read that too.
+    """
+    msg = update.get("message") or update.get("edited_message")
+    if not msg or "from" not in msg:
+        return None  # ignore channel posts / updates without a sender
+    base = {"chat_id": msg["chat"]["id"], "from_user": msg["from"]}
+    if "text" in msg:
+        return {**base, "kind": "text", "text": msg["text"]}
+    if "location" in msg:
+        loc = msg["location"]
+        return {**base, "kind": "location", "lat": loc["latitude"], "lng": loc["longitude"]}
+    return None  # ignore other update types (photos, voice, etc.) for now

@@ -34,17 +34,23 @@ async def telegram_webhook(
     update = await request.json()
     parsed = telegram.parse_update(update)
     if not parsed:
-        return {"ok": True}  # ignore non-text updates for now
+        return {"ok": True}  # ignore update types we don't handle
 
-    chat_id, tg_user, text = parsed
+    chat_id = parsed["chat_id"]
 
-    member = await db.get_member_by_telegram_id(tg_user["id"])
+    member = await db.get_member_by_telegram_id(parsed["from_user"]["id"])
     if not member:
         await telegram.send_message(
             chat_id, "أنا عبده 👋 بس لسه مش عارفك. كلّم Zain يضيفك للعيلة."
         )
         return {"ok": True}
 
+    if parsed["kind"] == "location":
+        # Live-location edits stream in frequently — record silently, never reply.
+        await db.upsert_location(member["id"], parsed["lat"], parsed["lng"])
+        return {"ok": True}
+
+    text = parsed["text"]
     await telegram.send_typing(chat_id)
     await db.log_message(member["id"], chat_id, "user", text)
     reply = await brain.think(member, chat_id, text)

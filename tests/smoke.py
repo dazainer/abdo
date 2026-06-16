@@ -53,10 +53,22 @@ class FakeDB:
         # Embedding is faked, so just return what's stored (most-recent first).
         return list(reversed(self.facts))[:k]
 
+    async def upsert_location(self, member_id, lat, lng):
+        self.locations[member_id] = (lat, lng)
+
+    async def get_location(self, name):
+        return self._loc_rows.get(name.lower())
+
+    async def get_all_locations(self):
+        return list(self._loc_rows.values())
+
 
 fake = FakeDB()
+fake.locations = {}      # member_id -> (lat, lng), written by upsert
+fake._loc_rows = {}      # name.lower() -> asyncpg-style row dict, for reads
 for name in ("recent_messages", "roster_string", "dogs_fed_today",
-             "mark_dogs_fed", "log_message", "add_fact", "search_facts"):
+             "mark_dogs_fed", "log_message", "add_fact", "search_facts",
+             "upsert_location", "get_location", "get_all_locations"):
     setattr(db, name, getattr(fake, name))
 
 
@@ -70,6 +82,35 @@ async def fake_embed(text, *, input_type):
 
 
 embeddings.embed = fake_embed
+
+
+# --- Fake calendar + a real home coordinate for the geofence ------------------
+from datetime import datetime  # noqa: E402
+from app import calendar_svc, geo  # noqa: E402
+from app.config import settings  # noqa: E402
+
+settings.home_lat = 30.0000      # New Cairo-ish; lets geo.describe compute distance
+settings.home_lng = 31.0000
+
+_fake_events = []
+_created_events = []
+calendar_svc.is_configured = lambda: True
+calendar_svc.get_events = lambda days_ahead=7: list(_fake_events)
+
+
+def fake_create_event(summary, start, end=None):
+    ev = {"id": "evt_new", "summary": summary, "start": start}
+    _created_events.append(ev)
+    return ev
+
+
+def fake_update_event(event_id, summary=None, start=None, end=None):
+    return {"id": event_id, "summary": summary or "Family Gathering",
+            "start": start or "2026-06-17T19:00:00"}
+
+
+calendar_svc.create_event = fake_create_event
+calendar_svc.update_event = fake_update_event
 
 
 # --- Scripted Anthropic client: simulate one tool_use turn, then final text --
@@ -185,6 +226,63 @@ async def test_recall_empty():
     check("honest 'no facts' when store is empty", out == "No matching household facts found.")
 
 
+async def test_where_is():
+    print("Scenario: where_is (live location + geofence)")
+    t = datetime(2026, 6, 16, 14, 30)
+    # Zain exactly at home; Omar ~3km away.
+    fake._loc_rows = {
+        "zain": {"name": "Zain", "lat": 30.0000, "lng": 31.0000, "updated_at": t},
+        "omar": {"name": "Omar", "lat": 30.0270, "lng": 31.0000, "updated_at": t},
+    }
+    out = await tools.run_tool("where_is", {"name": "Zain"}, member_id=1)
+    check("member at home reads 'home'", "Zain: home" in out and "14:30" in out)
+    out = await tools.run_tool("where_is", {"name": "Omar"}, member_id=1)
+    check("member away reads distance", "km from home" in out)
+    out = await tools.run_tool("where_is", {"name": "everyone"}, member_id=1)
+    check("'everyone' lists all sharers", "Zain" in out and "Omar" in out)
+
+    fake._loc_rows = {}
+    out = await tools.run_tool("where_is", {"name": "Zain"}, member_id=1)
+    check("not-sharing handled", "isn't sharing" in out)
+    out = await tools.run_tool("where_is", {"name": "everyone"}, member_id=1)
+    check("nobody-sharing handled", out == "No one is sharing their location right now.")
+
+
+async def test_get_calendar():
+    print("Scenario: get_calendar")
+    global _fake_events
+    _fake_events = [{"id": "evt1", "start": "2026-06-19", "summary": "Friday lunch at Teta's"}]
+    out = await tools.run_tool("get_calendar", {}, member_id=1)
+    check("returns upcoming events", "Friday lunch at Teta's" in out)
+    check("reader exposes event id (for edits)", "evt1" in out)
+
+    _fake_events = []
+    out = await tools.run_tool("get_calendar", {"days_ahead": 3}, member_id=1)
+    check("empty window handled", out == "No events on the shared calendar in that window.")
+
+    # Unconfigured path.
+    calendar_svc.is_configured = lambda: False
+    out = await tools.run_tool("get_calendar", {}, member_id=1)
+    check("unconfigured calendar handled", out == "The shared calendar isn't connected yet.")
+    calendar_svc.is_configured = lambda: True   # restore
+
+
+async def test_calendar_write():
+    print("Scenario: create_event / update_event")
+    _created_events.clear()
+    out = await tools.run_tool(
+        "create_event",
+        {"summary": "Family Gathering", "start": "2026-06-17T19:00:00"}, member_id=1)
+    check("create echoes confirmation with id", "Family Gathering" in out and "evt_new" in out)
+    check("create actually wrote to the calendar",
+          len(_created_events) == 1 and _created_events[0]["summary"] == "Family Gathering")
+
+    out = await tools.run_tool(
+        "update_event",
+        {"event_id": "evt_new", "start": "2026-06-17T20:00:00"}, member_id=1)
+    check("update echoes confirmation", out.startswith("Updated:") and "evt_new" in out)
+
+
 async def test_tool_dispatch_unknown():
     print("Scenario: unknown tool name")
     out = await tools.run_tool("does_not_exist", {}, member_id=1)
@@ -192,10 +290,20 @@ async def test_tool_dispatch_unknown():
 
 
 def test_parse_update():
-    print("Scenario: telegram.parse_update")
+    print("Scenario: telegram.parse_update (typed payloads)")
     text_update = {"message": {"chat": {"id": 5}, "from": {"id": 7}, "text": "hi"}}
-    check("parses a text message", telegram.parse_update(text_update) == (5, {"id": 7}, "hi"))
-    check("ignores non-text update", telegram.parse_update({"message": {"chat": {"id": 5}}}) is None)
+    check("parses a text message", telegram.parse_update(text_update) ==
+          {"chat_id": 5, "from_user": {"id": 7}, "kind": "text", "text": "hi"})
+
+    # Live location arrives as edited_message.
+    loc_update = {"edited_message": {"chat": {"id": 5}, "from": {"id": 7},
+                                     "location": {"latitude": 30.1, "longitude": 31.2}}}
+    check("parses a live-location edit", telegram.parse_update(loc_update) ==
+          {"chat_id": 5, "from_user": {"id": 7}, "kind": "location", "lat": 30.1, "lng": 31.2})
+
+    photo = {"message": {"chat": {"id": 5}, "from": {"id": 7}, "photo": [{"file_id": "x"}]}}
+    check("ignores unsupported (photo) update", telegram.parse_update(photo) is None)
+    check("ignores sender-less update", telegram.parse_update({"message": {"chat": {"id": 5}}}) is None)
     check("ignores empty update", telegram.parse_update({}) is None)
 
 
@@ -211,6 +319,9 @@ async def main():
     await test_mark_fed_then_status()
     await test_remember_and_recall_fact()
     await test_recall_empty()
+    await test_where_is()
+    await test_get_calendar()
+    await test_calendar_write()
     await test_tool_dispatch_unknown()
     test_parse_update()
     test_mark_result_parsing()

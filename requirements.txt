@@ -5,4 +5,6 @@ anthropic
 asyncpg
 pgvector
 cohere
+google-api-python-client
+google-auth
 pydantic-settings

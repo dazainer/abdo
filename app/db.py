@@ -95,3 +95,32 @@ async def search_facts(embedding, k: int = 4):
             "FROM household_facts ORDER BY embedding <=> $1 LIMIT $2",
             embedding, k,
         )
+
+
+# --- live location (Phase 3) ---
+
+async def upsert_location(member_id, lat, lng) -> None:
+    async with _pool.acquire() as con:
+        await con.execute(
+            "INSERT INTO member_locations (member_id, lat, lng, updated_at) "
+            "VALUES ($1, $2, $3, now()) "
+            "ON CONFLICT (member_id) DO UPDATE SET lat = $2, lng = $3, updated_at = now()",
+            member_id, lat, lng,
+        )
+
+
+async def get_location(name):
+    async with _pool.acquire() as con:
+        return await con.fetchrow(
+            "SELECT m.name, l.lat, l.lng, l.updated_at "
+            "FROM member_locations l JOIN family_members m ON m.id = l.member_id "
+            "WHERE m.name ILIKE $1", name,
+        )
+
+
+async def get_all_locations():
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT m.name, l.lat, l.lng, l.updated_at "
+            "FROM member_locations l JOIN family_members m ON m.id = l.member_id"
+        )

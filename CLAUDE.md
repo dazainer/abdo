@@ -15,6 +15,8 @@ Telegram webhook → FastAPI → load member + state from Postgres
 
 Adding a feature = adding a tool definition (`tools.py`) + its backing query (`db.py`) + any tables (`schema.sql`). **Never refactor the core loop to add a feature — extend the tool set.** Keep the webhook handler thin.
 
+The webhook now handles **text and location** updates; location pings (live location, arriving as `edited_message`) are recorded silently with no reply.
+
 The brain is the Anthropic API: **Haiku 4.5** as the everyday driver, escalating specific calls to **Sonnet 4.6** only when reasoning genuinely demands it.
 
 ## Stack
@@ -29,7 +31,8 @@ The brain is the Anthropic API: **Haiku 4.5** as the everyday driver, escalating
 
 ```
 app/  → main.py (FastAPI + webhook), config.py, db.py,
-        telegram.py, brain.py, tools.py, prompts.py, embeddings.py
+        telegram.py, brain.py, tools.py, prompts.py, embeddings.py,
+        calendar_svc.py, geo.py
 schema.sql, requirements.txt, Procfile, .env.example
 docs/ → phase-by-phase build specs
 ```
@@ -50,6 +53,8 @@ docs/ → phase-by-phase build specs
 - **Model strings drift**: confirm current model IDs at https://docs.claude.com/en/docs/about-claude/models before pinning. Currently `claude-haiku-4-5-20251001` and `claude-sonnet-4-6`.
 - **Embedding dimension is fixed at 1024**: `household_facts.embedding` is `vector(1024)`; only swap to another 1024-dim embedder. Also: document vs query input types (`search_document` on store, `search_query` on recall) must not be swapped — getting them backwards silently wrecks retrieval.
 - **Railway `DATABASE_URL` is not auto-shared**: set it on the app service as a reference → `${{Postgres.DATABASE_URL}}` (exact service name, or it resolves to an empty host and asyncpg crashes at startup).
+- **Calendar read + write** via a service account the family calendar is shared with (needs "Make changes to events" sharing). Scope is `calendar.events` (least-privilege writable — deliberately not the broader `calendar`, which can delete calendars). `googleapiclient` is blocking, so wrap its calls in `asyncio.to_thread`. Module is `calendar_svc` (not `calendar`) to avoid shadowing the stdlib. Abdo confirms before any create/edit (persona rule, not a code gate).
+- **Never reply per location update**: live-location edits stream in every few seconds — record and return `200`; only the `where_is` tool reports position. Answers show `updated HH:MM` because sharing can stop and leave stale coordinates.
 
 ## Commands
 
@@ -65,8 +70,8 @@ docs/ → phase-by-phase build specs
 Ship one phase at a time. **Build only the current phase.** Its detailed brief is in `docs/` — read that file before starting work on the phase. (The specs are intentionally *not* imported here, so they don't load into every session; open them on demand.)
 
 - **Phase 1 (done)** → `docs/abdo_phase1_spec.md`: Telegram bot, Egyptian-Arabic persona, per-member identity, dog-feeding status, deployed on Railway.
-- **Phase 2 (current)** → `docs/abdo_phase2_spec.md`: household knowledge base (RAG over `pgvector`, Cohere `embed-v4.0`).
-- **Phase 3** → shared Google Calendar awareness + Telegram live location.
+- **Phase 2 (done)** → `docs/abdo_phase2_spec.md`: household knowledge base (RAG over `pgvector`, Cohere `embed-v4.0`).
+- **Phase 3 (current)** → `docs/abdo_phase3_spec.md`: shared Google Calendar awareness + Telegram live location.
 - **Phase 4** → Egyptian voice (Whisper-Egyptian STT + EGTTS) and proactive nudges. (Wall tablet deferred.)
 
 `schema.sql` already includes the later-phase tables, so adding these phases needs **no migrations** — just new tools, queries, and prompt updates.

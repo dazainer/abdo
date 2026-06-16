@@ -3,3 +3,8 @@ __pycache__/
 .env
 .venv/
 venv/
+
+# Never commit Google service-account key files (the key also lives in .env)
+*service-account*.json
+*-key.json
+serious-hall-*.json
