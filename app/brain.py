@@ -9,7 +9,32 @@ from app import db
 log = logging.getLogger("abdo")
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
-MODEL = "claude-haiku-4-5-20251001"   # everyday chat; escalate to "claude-sonnet-4-6" when needed
+HAIKU = "claude-haiku-4-5-20251001"   # everyday driver
+SONNET = "claude-sonnet-4-6"          # escalate for calendar reasoning
+
+# Calendar work — interpreting relative dates, choosing create vs update,
+# tracking real event ids, and confirm-then-act — is exactly where Haiku flakes
+# (wrong weekday, duplicate events, invented ids, false "done"). Route those
+# turns to Sonnet. Heuristic keyword match across Arabic / English / Franco;
+# over-triggering only costs a bit more, under-triggering risks a bad write.
+_CALENDAR_HINTS = (
+    # English
+    "calendar", "event", "appointment", "schedule", "reschedule", "meeting", "remind",
+    # Arabic — calendar nouns + schedule verbs (add/move/postpone/delete/cancel)
+    "ميعاد", "معاد", "موعد", "مواعيد", "كالندر", "تقويم", "أجندة", "اجندة", "حدث",
+    "احجز", "احجزلي", "زوّد", "زود", "ضيف", "أضيف", "أجّل", "أجل", "اجّل", "اجل",
+    "غيّر", "غير", "انقل", "أنقل", "امسح", "إمسح", "الغي", "ألغي", "اتأجل", "اتلغى",
+    # Franco / Arabizi
+    "ma3ad", "me3ad", "mi3ad", "maw3ad", "mawa3eed", "8ayar", "ghayar", "2ayar",
+    "zawed", "zood", "2def", "def ", "emsa7", "alghy", "2agel", "a2gel", "an2el",
+)
+
+
+def _pick_model(user_text: str) -> str:
+    """Calendar-ish turns go to Sonnet; everything else stays on Haiku."""
+    t = user_text.lower()
+    return SONNET if any(h in t for h in _CALENDAR_HINTS) else HAIKU
+
 
 # Safety cap on the tool loop: bounds worst-case latency and API cost, and
 # guarantees the loop terminates even if the model keeps emitting tool calls.
@@ -18,6 +43,7 @@ MAX_TOOL_ROUNDS = 8
 
 
 async def think(member, chat_id: int, user_text: str) -> str:
+    model = _pick_model(user_text)
     history = await db.recent_messages(chat_id, limit=10)
     messages = [{"role": r["role"], "content": r["content"]} for r in history]
     messages.append({"role": "user", "content": user_text})
@@ -31,7 +57,7 @@ async def think(member, chat_id: int, user_text: str) -> str:
     # Tool loop: Claude may call a tool; we run it and feed the result back.
     for _ in range(MAX_TOOL_ROUNDS):
         resp = await client.messages.create(
-            model=MODEL,
+            model=model,
             max_tokens=600,
             system=system,
             tools=TOOLS,
@@ -65,7 +91,14 @@ async def think(member, chat_id: int, user_text: str) -> str:
             messages.append({"role": "user", "content": results})
             continue  # let Claude answer now that it has the tool output
 
-        return "".join(b.text for b in resp.content if b.type == "text")
+        text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        if not text:
+            # Model ended the turn with no text -> we used to send "" and Telegram
+            # rejected it (HTTP 400 empty), so the user just saw silence.
+            log.warning("empty model reply (stop_reason=%s, model=%s)",
+                        resp.stop_reason, model)
+            return "آسف، حصل عندي لخبطة بسيطة — ممكن تعيد اللي قلته؟"
+        return text
 
     # Hit the cap — stop rather than loop forever; ask them to simplify.
     return "آسف، الطلب ده طوّل عليّا شوية. ممكن نقسّمه خطوة خطوة؟"

@@ -364,6 +364,29 @@ async def test_shopping_list():
     check("list empty after clear", out == "The shopping list is empty.")
 
 
+def test_model_routing():
+    print("Scenario: calendar turns escalate to Sonnet, chat stays on Haiku")
+    check("Arabic 'add something Wednesday' -> Sonnet",
+          brain._pick_model("زود حاجة يوم الاربع") == brain.SONNET)
+    check("Franco 'change the appointment' -> Sonnet",
+          brain._pick_model("ghayar el ma3ad lel khamis") == brain.SONNET)
+    check("English 'delete the event' -> Sonnet",
+          brain._pick_model("delete the event on friday") == brain.SONNET)
+    check("plain chat stays on Haiku",
+          brain._pick_model("الكلاب اتأكلوا؟") == brain.HAIKU)
+    check("greeting stays on Haiku",
+          brain._pick_model("إزيك يا عبده") == brain.HAIKU)
+
+
+async def test_empty_reply_fallback():
+    print("Scenario: model returns no text -> safe fallback, never an empty send")
+    brain.client = FakeClient([
+        SimpleNamespace(stop_reason="end_turn", content=[_text_block("   ")]),
+    ])
+    reply = await brain.think(MEMBER, chat_id=99, user_text="إزيك")
+    check("empty/blank model output replaced", isinstance(reply, str) and reply.strip() != "")
+
+
 async def test_tool_failure_degrades():
     print("Scenario: a failing tool degrades honestly (no crash, no silence)")
     # Simulate a broken tool (bad calendar id / Cohere down): run_tool raises.
@@ -447,6 +470,8 @@ async def main():
     await test_get_calendar()
     await test_calendar_write()
     await test_shopping_list()
+    test_model_routing()
+    await test_empty_reply_fallback()
     await test_tool_failure_degrades()
     await test_tool_loop_terminates()
     await test_tool_dispatch_unknown()
