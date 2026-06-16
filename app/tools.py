@@ -1,9 +1,12 @@
 import asyncio
+import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app import db, embeddings, calendar_svc, geo
 from app.config import settings
+
+log = logging.getLogger("abdo")
 
 
 # Past this many minutes since the last ping, a live-location share has almost
@@ -107,37 +110,48 @@ TOOLS = [
         "name": "create_event",
         "description": (
             "Add a new event to the shared family calendar. Only call this AFTER the person "
-            "has confirmed the details you read back to them. Times are Cairo local time."
+            "has confirmed the details you read back to them. Pass the day the person SAID "
+            "(or an exact date from the date reference) and the time separately — never a "
+            "date you worked out yourself; Abdo's code turns the day into the real date."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "summary": {"type": "string", "description": "The event title."},
-                "start": {"type": "string",
-                          "description": "Start in ISO 8601 Cairo local time, e.g. 2026-06-19T19:00:00."},
-                "end": {"type": "string",
-                        "description": "Optional end (same format). Defaults to one hour after start."},
+                "day": {"type": "string",
+                        "description": ("The day, exactly as said: a weekday name ('Saturday'/'السبت'), "
+                                        "'today'/'tomorrow'/'day after tomorrow', 'next <weekday>', OR an "
+                                        "exact date copied from the date reference (YYYY-MM-DD). NEVER "
+                                        "compute or guess a date yourself.")},
+                "time": {"type": "string",
+                         "description": "Start time, 24-hour Cairo local, HH:MM, e.g. '19:00'."},
+                "end_time": {"type": "string",
+                             "description": "Optional end time, HH:MM. Defaults to one hour after start."},
             },
-            "required": ["summary", "start"],
+            "required": ["summary", "day", "time"],
         },
     },
     {
         "name": "update_event",
         "description": (
             "Change an existing calendar event (title or time). Get the event's id from "
-            "get_calendar first. Only call AFTER the person confirms the change. "
-            "To reschedule/move an event, pass only the new 'start' — the event keeps its "
-            "original length automatically. Pass 'end' ONLY if the person explicitly wants a "
-            "different end time or duration."
+            "get_calendar first and use it exactly. Only call AFTER the person confirms the "
+            "change. To reschedule/move an event, pass the new 'day' and/or 'time' — the event "
+            "keeps its original length automatically. Pass 'end_time' ONLY if the person wants "
+            "a different end time or duration. Like create_event, pass the spoken day, never a "
+            "date you computed."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "event_id": {"type": "string", "description": "The id of the event to change (from get_calendar)."},
                 "summary": {"type": "string", "description": "New title, if changing it."},
-                "start": {"type": "string", "description": "New start (ISO 8601 Cairo local time), if changing it."},
-                "end": {"type": "string",
-                        "description": "New end (ISO 8601 Cairo local time). Omit when only moving the event — duration is preserved."},
+                "day": {"type": "string",
+                        "description": ("New day (same rules as create_event's 'day'). Omit if not "
+                                        "moving it to another day.")},
+                "time": {"type": "string", "description": "New start time, HH:MM. Omit if not changing the time."},
+                "end_time": {"type": "string",
+                             "description": "New end time, HH:MM. Omit when only moving the event — duration is preserved."},
             },
             "required": ["event_id"],
         },
@@ -215,6 +229,18 @@ TOOLS = [
 ]
 
 
+async def _read_calendar(days_ahead: int):
+    """Read upcoming events, retrying once on a degraded read. googleapiclient is
+    blocking, so each attempt runs off the event loop. A persistent failure raises
+    CalendarReadError — the caller turns that into an honest 'try again' and STOPS,
+    never falling through to an empty-and-proceed."""
+    try:
+        return await asyncio.to_thread(calendar_svc.get_events, days_ahead)
+    except calendar_svc.CalendarReadError:
+        log.warning("calendar read failed; retrying once")
+        return await asyncio.to_thread(calendar_svc.get_events, days_ahead)
+
+
 async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
     if name == "get_dog_status":
         row = await db.dogs_fed_today()
@@ -242,8 +268,16 @@ async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
     if name == "get_calendar":
         if not calendar_svc.is_configured():
             return "The shared calendar isn't connected yet."
-        # googleapiclient is blocking — keep it off the event loop.
-        events = await asyncio.to_thread(calendar_svc.get_events, tool_input.get("days_ahead", 7))
+        try:
+            events = await _read_calendar(tool_input.get("days_ahead", 7))
+        except calendar_svc.CalendarReadError as e:
+            # A degraded read (boundary / FAILED_PRECONDITION) must NOT be reported
+            # as an empty calendar — that's exactly what makes the model create a
+            # duplicate of an event it just couldn't see. Stop and be honest.
+            log.warning("get_calendar read failed (after retry): %s", e)
+            return ("ERROR: couldn't fully reach the calendar right now. Tell the user "
+                    "plainly to try again in a moment. Do NOT assume the calendar is "
+                    "empty, and do NOT create or change any event based on this.")
         if not events:
             return "No events on the shared calendar in that window."
         return "\n".join(f"- {e['start']}: {e['summary']} (id: {e['id']})" for e in events)
@@ -253,24 +287,43 @@ async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
             return "The shared calendar isn't connected yet."
         ev = await asyncio.to_thread(
             calendar_svc.create_event,
-            tool_input["summary"], tool_input["start"], tool_input.get("end"),
+            tool_input["summary"], tool_input["day"], tool_input["time"],
+            tool_input.get("end_time"),
         )
         return f"Created: {ev['start']} {ev['summary']} (id: {ev['id']})."
 
     if name == "update_event":
         if not calendar_svc.is_configured():
             return "The shared calendar isn't connected yet."
-        ev = await asyncio.to_thread(
-            calendar_svc.update_event,
-            tool_input["event_id"], tool_input.get("summary"),
-            tool_input.get("start"), tool_input.get("end"),
-        )
+        try:
+            ev = await asyncio.to_thread(
+                calendar_svc.update_event,
+                tool_input["event_id"], tool_input.get("summary"),
+                tool_input.get("day"), tool_input.get("time"), tool_input.get("end_time"),
+            )
+        except calendar_svc.EventNotFound:
+            return (f"ERROR: no event with id '{tool_input['event_id']}' exists. Do NOT "
+                    f"invent or guess an id — call get_calendar to get the real one, or "
+                    f"tell the user you couldn't find that event.")
+        except calendar_svc.CalendarReadError as e:
+            log.warning("update_event read failed: %s", e)
+            return ("ERROR: couldn't reach the calendar to make that change right now. "
+                    "Tell the user to try again in a moment; do NOT claim it was changed.")
         return f"Updated: {ev['summary']} now {ev['start']} to {ev['end']} (id: {ev['id']})."
 
     if name == "delete_event":
         if not calendar_svc.is_configured():
             return "The shared calendar isn't connected yet."
-        await asyncio.to_thread(calendar_svc.delete_event, tool_input["event_id"])
+        try:
+            await asyncio.to_thread(calendar_svc.delete_event, tool_input["event_id"])
+        except calendar_svc.EventNotFound:
+            return (f"ERROR: no event with id '{tool_input['event_id']}' exists. Do NOT "
+                    f"invent or guess an id — call get_calendar to get the real one, or "
+                    f"tell the user you couldn't find that event.")
+        except calendar_svc.CalendarReadError as e:
+            log.warning("delete_event read failed: %s", e)
+            return ("ERROR: couldn't reach the calendar to delete that right now. "
+                    "Tell the user to try again in a moment; do NOT claim it was deleted.")
         return "Deleted the event."
 
     if name == "where_is":

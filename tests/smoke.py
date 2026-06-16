@@ -111,6 +111,7 @@ embeddings.embed = fake_embed
 
 # --- Fake calendar + a real home coordinate for the geofence ------------------
 from datetime import datetime, timedelta, timezone  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
 from app import calendar_svc, geo  # noqa: E402
 from app.config import settings  # noqa: E402
 
@@ -123,16 +124,19 @@ calendar_svc.is_configured = lambda: True
 calendar_svc.get_events = lambda days_ahead=7: list(_fake_events)
 
 
-def fake_create_event(summary, start, end=None):
+def fake_create_event(summary, day, time, end_time=None):
+    # Mirror the real signature: day+time, code resolves the date. The fake echoes
+    # the resolved start so the tool's confirmation string can be asserted.
+    d = calendar_svc.resolve_date(day)
+    start = calendar_svc._compose(d, time)
     ev = {"id": "evt_new", "summary": summary, "start": start}
     _created_events.append(ev)
     return ev
 
 
-def fake_update_event(event_id, summary=None, start=None, end=None):
+def fake_update_event(event_id, summary=None, day=None, time=None, end_time=None):
     return {"id": event_id, "summary": summary or "Family Gathering",
-            "start": start or "2026-06-17T19:00:00",
-            "end": end or "2026-06-17T20:00:00"}
+            "start": "2026-06-17T19:00:00", "end": "2026-06-17T20:00:00"}
 
 
 _deleted_events = []
@@ -312,24 +316,114 @@ async def test_get_calendar():
 
 
 async def test_calendar_write():
-    print("Scenario: create_event / update_event")
+    print("Scenario: create_event / update_event (day+time, code resolves date)")
     _created_events.clear()
     out = await tools.run_tool(
         "create_event",
-        {"summary": "Family Gathering", "start": "2026-06-17T19:00:00"}, member_id=1)
+        {"summary": "Family Gathering", "day": "tomorrow", "time": "19:00"}, member_id=1)
     check("create echoes confirmation with id", "Family Gathering" in out and "evt_new" in out)
     check("create actually wrote to the calendar",
           len(_created_events) == 1 and _created_events[0]["summary"] == "Family Gathering")
+    # The model passed a spoken day; the start the tool wrote is a real resolved date.
+    tomorrow = (datetime.now(ZoneInfo(settings.timezone)) + timedelta(days=1)).date().isoformat()
+    check("spoken day was resolved to a real date in code",
+          _created_events[0]["start"].startswith(tomorrow + "T19:00"))
 
     out = await tools.run_tool(
         "update_event",
-        {"event_id": "evt_new", "start": "2026-06-17T20:00:00"}, member_id=1)
+        {"event_id": "evt_new", "time": "20:00"}, member_id=1)
     check("update echoes confirmation", out.startswith("Updated:") and "evt_new" in out)
 
     _deleted_events.clear()
     out = await tools.run_tool("delete_event", {"event_id": "evt_new"}, member_id=1)
     check("delete confirms removal", out == "Deleted the event.")
     check("delete actually called the calendar", _deleted_events == ["evt_new"])
+
+
+def test_date_resolution():
+    print("Scenario: deterministic Cairo date resolution (no model arithmetic)")
+    from zoneinfo import ZoneInfo as _ZI
+    from datetime import datetime as _dt, date as _date
+    now = _dt(2026, 6, 17, 12, 0, tzinfo=_ZI(settings.timezone))   # a Wednesday
+    r = calendar_svc.resolve_date
+    check("'today' -> today's date", r("today", now=now) == now.date())
+    check("'tomorrow' -> +1 day", r("tomorrow", now=now) == now.date() + timedelta(days=1))
+    check("'day after tomorrow' -> +2 days",
+          r("day after tomorrow", now=now) == now.date() + timedelta(days=2))
+    check("explicit ISO date passes through", r("2026-06-19", now=now) == _date(2026, 6, 19))
+    # The classic Haiku bug: 'Wednesday' must land on a real Wednesday (the 17th, today).
+    check("'Wednesday' on a Wednesday -> that same Wednesday",
+          r("Wednesday", now=now) == _date(2026, 6, 17) and r("Wednesday", now=now).weekday() == 2)
+    # A weekday later in the week resolves to its real date, not an arithmetic guess.
+    check("'Friday' -> the coming Friday (19th)",
+          r("Friday", now=now) == _date(2026, 6, 19) and r("Friday", now=now).weekday() == 4)
+    check("Arabic weekday 'السبت' -> the coming Saturday (20th)",
+          r("السبت", now=now) == _date(2026, 6, 20))
+    check("Franco weekday 'el 7ad' style ('7ad') -> the coming Sunday (21st)",
+          r("7ad", now=now) == _date(2026, 6, 21))
+    check("'next Wednesday' jumps a full week (+7)",
+          r("next Wednesday", now=now) == _date(2026, 6, 24))
+    # Every resolved weekday actually matches the named weekday — never off by a day.
+    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    check("every weekday name resolves to its true weekday",
+          all(r(n, now=now).weekday() == i for i, n in enumerate(names)))
+    try:
+        r("someday", now=now)
+        check("gibberish day raises (no silent guess)", False)
+    except ValueError:
+        check("gibberish day raises (no silent guess)", True)
+
+
+async def test_calendar_read_guard():
+    print("Scenario: a failed/degraded read is never reported as empty")
+    real_get_events = calendar_svc.get_events
+    attempts = {"n": 0}
+
+    def boom(days_ahead=7):
+        attempts["n"] += 1
+        raise calendar_svc.CalendarReadError("Regional Access Boundary ... FAILED_PRECONDITION")
+
+    calendar_svc.get_events = boom
+    try:
+        out = await tools.run_tool("get_calendar", {}, member_id=1)
+        check("failed read does NOT say 'No events'", "No events" not in out)
+        check("failed read returns an honest error", out.startswith("ERROR"))
+        check("failed read tells the model not to create off it",
+              "do NOT create" in out or "do not create" in out.lower())
+        check("read was retried once before giving up", attempts["n"] == 2)
+    finally:
+        calendar_svc.get_events = real_get_events
+
+    # A genuinely empty calendar is still distinct from a failed one.
+    global _fake_events
+    _fake_events = []
+    out = await tools.run_tool("get_calendar", {}, member_id=1)
+    check("genuinely empty calendar still reads empty",
+          out == "No events on the shared calendar in that window.")
+
+
+async def test_calendar_not_found_guard():
+    print("Scenario: editing a non-existent id errors, never fakes success")
+    real_update, real_delete = calendar_svc.update_event, calendar_svc.delete_event
+
+    def update_missing(event_id, summary=None, day=None, time=None, end_time=None):
+        raise calendar_svc.EventNotFound(event_id)
+
+    def delete_missing(event_id):
+        raise calendar_svc.EventNotFound(event_id)
+
+    calendar_svc.update_event = update_missing
+    calendar_svc.delete_event = delete_missing
+    try:
+        out = await tools.run_tool("update_event", {"event_id": "made_up", "time": "20:00"}, member_id=1)
+        check("update of missing id returns an error, not success",
+              out.startswith("ERROR") and "made_up" in out)
+        out = await tools.run_tool("delete_event", {"event_id": "made_up"}, member_id=1)
+        check("delete of missing id returns an error, not success",
+              out.startswith("ERROR") and "made_up" in out)
+    finally:
+        calendar_svc.update_event = real_update
+        calendar_svc.delete_event = real_delete
 
 
 async def test_shopping_list():
@@ -364,18 +458,21 @@ async def test_shopping_list():
     check("list empty after clear", out == "The shopping list is empty.")
 
 
-def test_model_routing():
-    print("Scenario: calendar turns escalate to Sonnet, chat stays on Haiku")
-    check("Arabic 'add something Wednesday' -> Sonnet",
-          brain._pick_model("زود حاجة يوم الاربع") == brain.SONNET)
-    check("Franco 'change the appointment' -> Sonnet",
-          brain._pick_model("ghayar el ma3ad lel khamis") == brain.SONNET)
-    check("English 'delete the event' -> Sonnet",
-          brain._pick_model("delete the event on friday") == brain.SONNET)
-    check("plain chat stays on Haiku",
-          brain._pick_model("الكلاب اتأكلوا؟") == brain.HAIKU)
-    check("greeting stays on Haiku",
-          brain._pick_model("إزيك يا عبده") == brain.HAIKU)
+async def test_calendar_runs_on_haiku():
+    print("Scenario: calendar turns now run on Haiku (Sonnet escalation retired)")
+    check("Sonnet escalation removed from brain", not hasattr(brain, "_pick_model"))
+    # A calendar turn through the real tool loop must call the model on Haiku.
+    _fake_events.clear()
+    brain.client = FakeClient(script_for("get_calendar", "مفيش حاجة في التقويم الفترة دي."))
+    await brain.think(MEMBER, chat_id=99, user_text="زود ميعاد يوم الجمعة الساعة 7")
+    models_used = {m for m, _ in brain.client.messages.calls}
+    check("every model call on a calendar turn used Haiku", models_used == {brain.HAIKU})
+    # And a plain chat turn is Haiku too (everyday driver unchanged).
+    fake.fed_today = None
+    brain.client = FakeClient(script_for("get_dog_status", "لسه يا زين."))
+    await brain.think(MEMBER, chat_id=99, user_text="الكلاب اتأكلوا؟")
+    check("plain chat also on Haiku",
+          {m for m, _ in brain.client.messages.calls} == {brain.HAIKU})
 
 
 async def test_empty_reply_fallback():
@@ -469,8 +566,11 @@ async def main():
     await test_where_is()
     await test_get_calendar()
     await test_calendar_write()
+    test_date_resolution()
+    await test_calendar_read_guard()
+    await test_calendar_not_found_guard()
     await test_shopping_list()
-    test_model_routing()
+    await test_calendar_runs_on_haiku()
     await test_empty_reply_fallback()
     await test_tool_failure_degrades()
     await test_tool_loop_terminates()
