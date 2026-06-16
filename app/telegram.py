@@ -1,12 +1,23 @@
+import logging
+
 import httpx
 from app.config import settings
 
+log = logging.getLogger("abdo")
 API = f"https://api.telegram.org/bot{settings.telegram_bot_token}"
 
 
 async def send_message(chat_id: int, text: str) -> None:
     async with httpx.AsyncClient(timeout=15) as client:
-        await client.post(f"{API}/sendMessage", json={"chat_id": chat_id, "text": text})
+        resp = await client.post(
+            f"{API}/sendMessage", json={"chat_id": chat_id, "text": text}
+        )
+    # Telegram rejects (HTTP 400) on empty text or bad content and we used to
+    # swallow it — the user just saw no reply. Log it loudly instead of failing
+    # the webhook (raising here would make Telegram retry and duplicate work).
+    if resp.status_code != 200:
+        log.error("sendMessage failed %s: %s (text=%r)",
+                  resp.status_code, resp.text, text)
 
 
 async def send_typing(chat_id: int) -> None:

@@ -1,9 +1,12 @@
+import logging
+
 from anthropic import AsyncAnthropic
 from app.config import settings
 from app.tools import TOOLS, run_tool
 from app.prompts import build_system_prompt
 from app import db
 
+log = logging.getLogger("abdo")
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 MODEL = "claude-haiku-4-5-20251001"   # everyday chat; escalate to "claude-sonnet-4-6" when needed
@@ -41,6 +44,9 @@ async def think(member, chat_id: int, user_text: str) -> str:
             for block in resp.content:
                 if block.type == "tool_use":
                     out = await run_tool(block.name, block.input, member["id"])
+                    # Ground truth for debugging: what the tool actually returned,
+                    # so we can tell a tool bug from the model mis-narrating it.
+                    log.info("tool %s(%s) -> %r", block.name, block.input, out)
                     results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,

@@ -1,11 +1,20 @@
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Header, HTTPException
 from app.config import settings
 from app import db, telegram, brain
 
+# Bump this with each deploy-worth change. Surfaced at GET / so we can confirm
+# from outside exactly which code Railway is actually running.
+VERSION = "2026-06-16-loc-freshness+shopping"
+
+log = logging.getLogger("abdo")
+log.setLevel(logging.INFO)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    log.info("Abdo starting up, version=%s", VERSION)
     await db.init_pool()
     yield
     await db.close_pool()
@@ -16,7 +25,7 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
 async def health():
-    return {"ok": True, "name": "Abdo"}
+    return {"ok": True, "name": "Abdo", "version": VERSION}
 
 
 @app.post("/tg/{secret}")
