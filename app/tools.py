@@ -1,6 +1,13 @@
 import asyncio
+from zoneinfo import ZoneInfo
 
 from app import db, embeddings, calendar_svc, geo
+from app.config import settings
+
+
+def _local_hhmm(ts) -> str:
+    """Render a TIMESTAMPTZ (UTC-aware from asyncpg) as Cairo HH:MM."""
+    return ts.astimezone(ZoneInfo(settings.timezone)).strftime("%H:%M")
 
 TOOLS = [
     {
@@ -194,12 +201,12 @@ async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
             if not rows:
                 return "No one is sharing their location right now."
             return "\n".join(
-                f"{r['name']}: {geo.describe(r['lat'], r['lng'])} (updated {r['updated_at']:%H:%M})"
+                f"{r['name']}: {geo.describe(r['lat'], r['lng'])} (updated {_local_hhmm(r['updated_at'])})"
                 for r in rows
             )
         row = await db.get_location(who)
         if not row:
             return f"{who} isn't sharing a location right now."
-        return f"{row['name']}: {geo.describe(row['lat'], row['lng'])} (updated {row['updated_at']:%H:%M})"
+        return f"{row['name']}: {geo.describe(row['lat'], row['lng'])} (updated {_local_hhmm(row['updated_at'])})"
 
     return f"Unknown tool: {name}"
