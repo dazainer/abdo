@@ -8,6 +8,11 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 MODEL = "claude-haiku-4-5-20251001"   # everyday chat; escalate to "claude-sonnet-4-6" when needed
 
+# Safety cap on the tool loop: bounds worst-case latency and API cost, and
+# guarantees the loop terminates even if the model keeps emitting tool calls.
+# Legit multi-step turns (find id -> delete -> move) use only a handful.
+MAX_TOOL_ROUNDS = 8
+
 
 async def think(member, chat_id: int, user_text: str) -> str:
     history = await db.recent_messages(chat_id, limit=10)
@@ -21,7 +26,7 @@ async def think(member, chat_id: int, user_text: str) -> str:
     )
 
     # Tool loop: Claude may call a tool; we run it and feed the result back.
-    while True:
+    for _ in range(MAX_TOOL_ROUNDS):
         resp = await client.messages.create(
             model=MODEL,
             max_tokens=600,
@@ -45,3 +50,6 @@ async def think(member, chat_id: int, user_text: str) -> str:
             continue  # let Claude answer now that it has the tool output
 
         return "".join(b.text for b in resp.content if b.type == "text")
+
+    # Hit the cap — stop rather than loop forever; ask them to simplify.
+    return "آسف، الطلب ده طوّل عليّا شوية. ممكن نقسّمه خطوة خطوة؟"

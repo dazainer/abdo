@@ -297,6 +297,28 @@ async def test_calendar_write():
     check("delete actually called the calendar", _deleted_events == ["evt_new"])
 
 
+async def test_tool_loop_terminates():
+    print("Scenario: tool loop is bounded (no infinite loop)")
+
+    class AlwaysToolUse:
+        def __init__(self):
+            self.calls = 0
+
+        async def create(self, **kw):
+            self.calls += 1
+            return SimpleNamespace(stop_reason="tool_use",
+                                   content=[_tool_use_block("get_dog_status", f"t{self.calls}")])
+
+    class AlwaysToolClient:
+        def __init__(self):
+            self.messages = AlwaysToolUse()
+
+    brain.client = AlwaysToolClient()
+    reply = await brain.think(MEMBER, chat_id=99, user_text="loop forever")
+    check("loop stops at the cap", brain.client.messages.calls == brain.MAX_TOOL_ROUNDS)
+    check("returns a graceful fallback", isinstance(reply, str) and len(reply) > 0)
+
+
 async def test_tool_dispatch_unknown():
     print("Scenario: unknown tool name")
     out = await tools.run_tool("does_not_exist", {}, member_id=1)
@@ -336,6 +358,7 @@ async def main():
     await test_where_is()
     await test_get_calendar()
     await test_calendar_write()
+    await test_tool_loop_terminates()
     await test_tool_dispatch_unknown()
     test_parse_update()
     test_mark_result_parsing()
