@@ -80,3 +80,11 @@ def update_event(event_id: str, summary: str | None = None,
         calendarId=settings.google_calendar_id, eventId=event_id, body=body
     ).execute()
     return {"id": ev["id"], "summary": ev.get("summary"), "start": ev["start"].get("dateTime")}
+
+
+def delete_event(event_id: str) -> None:
+    """Delete an event by id. Returns nothing (Google returns an empty 204). Blocking."""
+    service = _get_service()
+    service.events().delete(
+        calendarId=settings.google_calendar_id, eventId=event_id
+    ).execute()

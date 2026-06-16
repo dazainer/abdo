@@ -109,8 +109,16 @@ def fake_update_event(event_id, summary=None, start=None, end=None):
             "start": start or "2026-06-17T19:00:00"}
 
 
+_deleted_events = []
+
+
+def fake_delete_event(event_id):
+    _deleted_events.append(event_id)
+
+
 calendar_svc.create_event = fake_create_event
 calendar_svc.update_event = fake_update_event
+calendar_svc.delete_event = fake_delete_event
 
 
 # --- Scripted Anthropic client: simulate one tool_use turn, then final text --
@@ -281,6 +289,11 @@ async def test_calendar_write():
         "update_event",
         {"event_id": "evt_new", "start": "2026-06-17T20:00:00"}, member_id=1)
     check("update echoes confirmation", out.startswith("Updated:") and "evt_new" in out)
+
+    _deleted_events.clear()
+    out = await tools.run_tool("delete_event", {"event_id": "evt_new"}, member_id=1)
+    check("delete confirms removal", out == "Deleted the event.")
+    check("delete actually called the calendar", _deleted_events == ["evt_new"])
 
 
 async def test_tool_dispatch_unknown():

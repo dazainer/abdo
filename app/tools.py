@@ -97,6 +97,20 @@ TOOLS = [
         },
     },
     {
+        "name": "delete_event",
+        "description": (
+            "Delete an event from the shared family calendar. Get the event's id from "
+            "get_calendar first. Only call AFTER the person confirms the deletion."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "The id of the event to delete (from get_calendar)."},
+            },
+            "required": ["event_id"],
+        },
+    },
+    {
         "name": "where_is",
         "description": (
             "Find where a family member currently is, from their shared live location. "
@@ -162,6 +176,12 @@ async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
             tool_input.get("start"), tool_input.get("end"),
         )
         return f"Updated: {ev['start']} {ev['summary']} (id: {ev['id']})."
+
+    if name == "delete_event":
+        if not calendar_svc.is_configured():
+            return "The shared calendar isn't connected yet."
+        await asyncio.to_thread(calendar_svc.delete_event, tool_input["event_id"])
+        return "Deleted the event."
 
     if name == "where_is":
         who = tool_input["name"]
