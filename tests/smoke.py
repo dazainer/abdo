@@ -168,6 +168,8 @@ class FakeMessages:
 
     async def create(self, *, model, max_tokens, system, tools, messages):
         self.calls.append((model, [m["role"] for m in messages]))
+        self.systems = getattr(self, "systems", [])
+        self.systems.append(system)
         resp = self._script[self._i]
         self._i += 1
         return resp
@@ -475,6 +477,20 @@ async def test_calendar_runs_on_haiku():
           {m for m, _ in brain.client.messages.calls} == {brain.HAIKU})
 
 
+async def test_voice_brain_threads_flag():
+    print("Scenario: brain.think(voice=True) reaches the model with the spoken-reply hint")
+    fake.fed_today = None
+    brain.client = FakeClient(script_for("get_dog_status", "لسه يا زين."))
+    await brain.think(MEMBER, chat_id=99, user_text="الكلاب اتأكلوا؟", voice=True)
+    check("voice hint present in the system prompt sent to the model",
+          all("SPOKEN ALOUD" in s for s in brain.client.messages.systems))
+    # The text path (default voice=False) must NOT carry the hint.
+    brain.client = FakeClient(script_for("get_dog_status", "لسه يا زين."))
+    await brain.think(MEMBER, chat_id=99, user_text="الكلاب اتأكلوا؟")
+    check("text path keeps the un-voiced prompt",
+          all("SPOKEN ALOUD" not in s for s in brain.client.messages.systems))
+
+
 async def test_empty_reply_fallback():
     print("Scenario: model returns no text -> safe fallback, never an empty send")
     brain.client = FakeClient([
@@ -545,10 +561,26 @@ def test_parse_update():
     check("parses a live-location edit", telegram.parse_update(loc_update) ==
           {"chat_id": 5, "from_user": {"id": 7}, "kind": "location", "lat": 30.1, "lng": 31.2})
 
+    voice_update = {"message": {"chat": {"id": 5}, "from": {"id": 7},
+                                "voice": {"file_id": "vf1", "duration": 4}}}
+    check("parses a voice message", telegram.parse_update(voice_update) ==
+          {"chat_id": 5, "from_user": {"id": 7}, "kind": "voice",
+           "file_id": "vf1", "duration": 4})
+
     photo = {"message": {"chat": {"id": 5}, "from": {"id": 7}, "photo": [{"file_id": "x"}]}}
     check("ignores unsupported (photo) update", telegram.parse_update(photo) is None)
     check("ignores sender-less update", telegram.parse_update({"message": {"chat": {"id": 5}}}) is None)
     check("ignores empty update", telegram.parse_update({}) is None)
+
+
+def test_voice_mode_prompt():
+    print("Scenario: voice flag shortens the prompt for the ear (text path unchanged)")
+    from app.prompts import build_system_prompt
+    text_p = build_system_prompt("Zain", "member", "Zain (member)")
+    voice_p = build_system_prompt("Zain", "member", "Zain (member)", voice=True)
+    check("text prompt has no voice hint", "SPOKEN ALOUD" not in text_p)
+    check("voice prompt adds the spoken-reply hint", "SPOKEN ALOUD" in voice_p)
+    check("voice prompt steers numbers-as-words", "words" in voice_p)
 
 
 def test_mark_result_parsing():
@@ -571,11 +603,13 @@ async def main():
     await test_calendar_not_found_guard()
     await test_shopping_list()
     await test_calendar_runs_on_haiku()
+    await test_voice_brain_threads_flag()
     await test_empty_reply_fallback()
     await test_tool_failure_degrades()
     await test_tool_loop_terminates()
     await test_tool_dispatch_unknown()
     test_parse_update()
+    test_voice_mode_prompt()
     test_mark_result_parsing()
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

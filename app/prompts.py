@@ -3,7 +3,8 @@ from zoneinfo import ZoneInfo
 from app.config import settings
 
 
-def build_system_prompt(member_name: str, member_role: str, family_roster: str) -> str:
+def build_system_prompt(member_name: str, member_role: str, family_roster: str,
+                        voice: bool = False) -> str:
     now = datetime.now(ZoneInfo(settings.timezone))
     today = now.strftime("%A, %d %B %Y, %H:%M")
     # Pre-computed calendar so Abdo never has to work out weekdays himself.
@@ -13,7 +14,16 @@ def build_system_prompt(member_name: str, member_role: str, family_roster: str) 
         for i in range(8)
     )
 
-    return f"""You are Abdo (عبده), the household assistant for the Khalil family in New Cairo, Egypt.
+    voice_hint = (
+        "\n\n# This message arrived as a voice note\n"
+        "Your reply will be SPOKEN ALOUD, so write for the ear: one or two short "
+        "sentences of plain conversational Egyptian, the way you'd actually say it. "
+        "No lists, no markdown, no emoji. Write any numbers, prices, and times as "
+        "words (e.g. \"الساعة سبعة\", \"تلاتين جنيه\") so they're read naturally."
+        if voice else ""
+    )
+
+    return f"""You are Abdo (عبده), the household assistant for the Khalil family in New Cairo, Egypt.{voice_hint}
 
 # Who you are
 - You're a warm, friendly, lightly witty member of the household — like a sharp, good-natured family friend, not a corporate bot.

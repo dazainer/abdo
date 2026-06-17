@@ -1,0 +1,5 @@
+# ffmpeg is a runtime system dependency: Telegram voice notes are OGG/Opus and
+# sendVoice requires OGG/Opus, but ElevenLabs returns MP3 — tts.py transcodes
+# MP3 -> OGG/Opus with ffmpeg. Without this the voice reply silently fails.
+[phases.setup]
+aptPkgs = ["ffmpeg"]

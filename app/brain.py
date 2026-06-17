@@ -25,15 +25,18 @@ HAIKU = "claude-haiku-4-5-20251001"
 MAX_TOOL_ROUNDS = 8
 
 
-async def think(member, chat_id: int, user_text: str) -> str:
+async def think(member, chat_id: int, user_text: str, voice: bool = False) -> str:
     history = await db.recent_messages(chat_id, limit=10)
     messages = [{"role": r["role"], "content": r["content"]} for r in history]
     messages.append({"role": "user", "content": user_text})
 
+    # `voice=True` (the brain doesn't otherwise know how the text arrived) shortens
+    # replies for the ear. Tools, DB, and persona are otherwise identical to text.
     system = build_system_prompt(
         member_name=member["name"],
         member_role=member["role"],
         family_roster=await db.roster_string(),
+        voice=voice,
     )
 
     # Tool loop: Claude may call a tool; we run it and feed the result back.

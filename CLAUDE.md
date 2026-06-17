@@ -15,7 +15,7 @@ Telegram webhook → FastAPI → load member + state from Postgres
 
 Adding a feature = adding a tool definition (`tools.py`) + its backing query (`db.py`) + any tables (`schema.sql`). **Never refactor the core loop to add a feature — extend the tool set.** Keep the webhook handler thin.
 
-The webhook now handles **text and location** updates; location pings (live location, arriving as `edited_message`) are recorded silently with no reply.
+The webhook now handles **text, location, and voice** updates; location pings (live location, arriving as `edited_message`) are recorded silently with no reply. Voice notes run in a **background task** (STT → brain → TTS) and return `200` first, to avoid Telegram retry/duplicate replies.
 
 The brain is the Anthropic API: **Haiku 4.5** as the everyday driver, escalating specific calls to **Sonnet 4.6** only when reasoning genuinely demands it.
 
@@ -32,8 +32,8 @@ The brain is the Anthropic API: **Haiku 4.5** as the everyday driver, escalating
 ```
 app/  → main.py (FastAPI + webhook), config.py, db.py,
         telegram.py, brain.py, tools.py, prompts.py, embeddings.py,
-        calendar_svc.py, geo.py
-schema.sql, requirements.txt, Procfile, .env.example
+        calendar_svc.py, geo.py, stt.py, tts.py
+schema.sql, requirements.txt, Procfile, nixpacks.toml, .env.example
 docs/ → phase-by-phase build specs
 ```
 
@@ -55,6 +55,8 @@ docs/ → phase-by-phase build specs
 - **Railway `DATABASE_URL` is not auto-shared**: set it on the app service as a reference → `${{Postgres.DATABASE_URL}}` (exact service name, or it resolves to an empty host and asyncpg crashes at startup).
 - **Calendar read + write** via a service account the family calendar is shared with (needs "Make changes to events" sharing). Scope is `calendar.events` (least-privilege writable — deliberately not the broader `calendar`, which can delete calendars). `googleapiclient` is blocking, so wrap its calls in `asyncio.to_thread`. Module is `calendar_svc` (not `calendar`) to avoid shadowing the stdlib. Abdo confirms before any create/edit (persona rule, not a code gate).
 - **Never reply per location update**: live-location edits stream in every few seconds — record and return `200`; only the `where_is` tool reports position. Answers show `updated HH:MM` because sharing can stop and leave stale coordinates.
+- **Voice is an I/O channel, not a tool**: `brain.py`/`tools.py`/`db.py`/persona are unchanged — STT just produces text the brain answers, and TTS speaks the reply back. STT/TTS are isolated in `stt.py`/`tts.py` (ElevenLabs: Scribe + Flash v2.5, swappable). The Egyptian accent comes from the chosen `tts_voice_id`, **not** the default Arabic voice (which leans Gulf/MSA) — audition or clone a Cairene one. The voice round-trip MUST run in a `BackgroundTasks` job after returning `200`, or Telegram times out and retries → duplicate replies. Modality matching: voice in → voice out (`voice=True` only shortens the reply for the ear).
+- **`sendVoice` needs OGG/Opus; ElevenLabs returns MP3** → `tts.py` transcodes with **ffmpeg** (a required system package — `nixpacks.toml` `aptPkgs`). Sending MP3 to `sendVoice` won't render as a voice note. Flash v2.5 skips number/date normalization, so the voice-mode prompt makes Abdo write numbers as words.
 
 ## Commands
 
@@ -71,7 +73,7 @@ Ship one phase at a time. **Build only the current phase.** Its detailed brief i
 
 - **Phase 1 (done)** → `docs/abdo_phase1_spec.md`: Telegram bot, Egyptian-Arabic persona, per-member identity, dog-feeding status, deployed on Railway.
 - **Phase 2 (done)** → `docs/abdo_phase2_spec.md`: household knowledge base (RAG over `pgvector`, Cohere `embed-v4.0`).
-- **Phase 3 (current)** → `docs/abdo_phase3_spec.md`: shared Google Calendar awareness + Telegram live location.
-- **Phase 4** → Egyptian voice (Whisper-Egyptian STT + EGTTS) and proactive nudges. (Wall tablet deferred.)
+- **Phase 3 (done)** → `docs/abdo_phase3_spec.md`: shared Google Calendar awareness + Telegram live location.
+- **Phase 4 (current)** → `docs/abdo_phase4_voice_spec.md`: Egyptian voice over Telegram (ElevenLabs Scribe STT + Flash v2.5 TTS). Voice round-trip runs in a background task. Proactive nudges still to come. (Wall tablet deferred.)
 
 `schema.sql` already includes the later-phase tables, so adding these phases needs **no migrations** — just new tools, queries, and prompt updates.

@@ -15,6 +15,17 @@ class Settings(BaseSettings):
     home_lat: float | None = None
     home_lng: float | None = None
     timezone: str = "Africa/Cairo"
+    # Phase 4 — Egyptian voice over Telegram (ElevenLabs: Scribe STT + Flash v2.5 TTS).
+    # STT/TTS are isolated in stt.py/tts.py; the Egyptian accent comes from the chosen
+    # voice, not the default Arabic voice — audition/clone a Cairene one for tts_voice_id.
+    elevenlabs_api_key: str | None = None
+    tts_voice_id: str | None = None             # an Egyptian-accent voice (Voice Library or a clone)
+    tts_model: str = "eleven_flash_v2_5"        # fastest (~75ms) and half the credit cost
+    stt_model: str = "scribe_v1"                # scribe_v2 also exists; swap via env if desired
+    stt_language: str = "ar"                    # Arabic (expect code-switching with English)
+    voice_replies: bool = True                  # reply with voice when the user sent voice
+    reply_text_alongside_voice: bool = True     # send text first (instant), then the voice note
+    max_voice_seconds: int = 60                 # ignore monologues longer than this
 
 
 settings = Settings()
