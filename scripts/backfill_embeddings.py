@@ -19,6 +19,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncpg
+from pgvector.asyncpg import register_vector
 
 from app import embeddings
 from app.config import settings
@@ -26,6 +27,9 @@ from app.config import settings
 
 async def main(do_all: bool, dry_run: bool) -> None:
     con = await asyncpg.connect(settings.database_url)
+    # Teach asyncpg the pgvector `vector` type (db.py does this on the pool via
+    # init=_init_conn); without it the embedding list can't be encoded for UPDATE.
+    await register_vector(con)
     try:
         rows = await con.fetch("SELECT id, content, embedding FROM household_facts ORDER BY id")
         bad, fixed = 0, 0
