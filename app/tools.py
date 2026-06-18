@@ -338,10 +338,18 @@ async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
         return "Stored."
 
     if name == "recall_facts":
-        vec = await embeddings.embed(tool_input["query"], input_type="search_query")
+        query = tool_input["query"]
+        log.info("recall_facts: query=%r", query)
+        vec = await embeddings.embed(query, input_type="search_query")
         rows = await db.search_facts(vec, k=4)
         if not rows:
+            # Visible in Railway logs: 0 rows means either the store is empty or a
+            # query embedding/encoding problem — not the old is_valid drop bug.
+            log.info("recall_facts: 0 rows for query=%r", query)
             return "No matching household facts found."
+        top = rows[0]
+        log.info("recall_facts: %d row(s) for query=%r; top id=%s distance=%.4f",
+                 len(rows), query, top["id"], top["distance"])
         return "\n".join(f"- [{r['category']}] {r['content']}" for r in rows)
 
     if name == "get_calendar":

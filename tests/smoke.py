@@ -69,7 +69,10 @@ class FakeDB:
 
     async def search_facts(self, embedding, k=4):
         # Embedding is faked, so just return what's stored (most-recent first).
-        return list(reversed(self.facts))[:k]
+        # Mirror the real row shape: id + category + content + distance (the recall
+        # path logs the top row's id and distance).
+        return [{"id": f["id"], "category": f["category"], "content": f["content"],
+                 "distance": 0.0} for f in reversed(self.facts)][:k]
 
     async def get_member_id_by_name(self, name):
         return {"zain": 1, "omar": 2}.get(name.lower())
@@ -348,6 +351,40 @@ async def test_store_guard_invalid_embedding():
         check("nothing was written on a bad embedding", len(fake.facts) == 0)
     finally:
         embeddings.embed = real_embed
+
+
+def test_is_valid_robust_to_numpy():
+    print("Scenario: is_valid accepts a DB-shaped (numpy float32) vector, rejects junk")
+    import numpy as np
+    dim = embeddings.EMBED_DIM
+    # pgvector decodes a stored vector to a numpy float32 ndarray — this is exactly
+    # what wrongly read as invalid before (isinstance(list)/isinstance(float) both fail
+    # on it), flagging good rows bad in backfill and threatening recall.
+    nd = np.full(dim, 0.0123, dtype=np.float32)
+    check("numpy float32 ndarray of len 1024 is valid", embeddings.is_valid(nd) is True)
+    check("plain python-float list of len 1024 still valid",
+          embeddings.is_valid([0.01] * dim) is True)
+    check("None is invalid", embeddings.is_valid(None) is False)
+    check("wrong length is invalid", embeddings.is_valid([0.01] * (dim // 2)) is False)
+    check("numpy ndarray of wrong length is invalid",
+          embeddings.is_valid(np.zeros(dim - 1, dtype=np.float32)) is False)
+    check("all-zero vector is invalid (NULL-equivalent junk)",
+          embeddings.is_valid(np.zeros(dim, dtype=np.float32)) is False)
+
+
+async def test_search_returns_db_shaped_fact():
+    print("Scenario: a fact with a DB-shaped (numpy) embedding is recalled, not dropped")
+    import numpy as np
+    fake.facts.clear()
+    embed_calls.clear()
+    # Seed a fact whose embedding is a numpy float32 ndarray, exactly as pgvector hands
+    # rows back. The recall path must surface it (it must not silently drop valid rows).
+    fake.facts.append({"id": 6, "category": "wifi",
+                       "content": "The Wi-Fi password is koki2013.",
+                       "embedding": np.full(embeddings.EMBED_DIM, 0.02, dtype=np.float32)})
+    out = await tools.run_tool("recall_facts", {"query": "what's the wifi password"}, member_id=1)
+    check("seeded wifi fact is returned by search", "koki2013" in out and "[wifi]" in out)
+    check("recall used input_type=search_query", embed_calls == ["search_query"])
 
 
 async def test_calendar_weekday_read():
@@ -746,6 +783,8 @@ async def main():
     await test_recall_empty()
     await test_store_dedup()
     await test_store_guard_invalid_embedding()
+    test_is_valid_robust_to_numpy()
+    await test_search_returns_db_shaped_fact()
     await test_where_is()
     await test_get_calendar()
     await test_calendar_weekday_read()

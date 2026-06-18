@@ -10,15 +10,26 @@ EMBED_DIM = 1024
 
 
 def is_valid(vec) -> bool:
-    """A storable embedding is exactly EMBED_DIM finite, non-all-zero floats. Guards
-    against storing a fact with a NULL/wrong-dim/zero vector, which silently wrecks
-    recall (the original wifi-recall miss) — better to fail loudly than store junk."""
-    return (
-        isinstance(vec, (list, tuple))
-        and len(vec) == EMBED_DIM
-        and all(isinstance(x, (int, float)) and math.isfinite(x) for x in vec)
-        and any(x != 0 for x in vec)
-    )
+    """A storable/usable embedding is exactly EMBED_DIM finite, non-all-zero floats.
+
+    Must accept the value however it arrives. Cohere returns a Python list, but
+    pgvector (with register_vector) decodes a vector read back from Postgres into a
+    numpy ndarray of float32. The old isinstance(list/tuple) + isinstance(int/float)
+    checks false-REJECTED every valid row read from the DB — a numpy ndarray isn't a
+    list and numpy float32 isn't a Python float — which silently flagged good rows as
+    invalid (backfill) and could drop them from recall. So: never test truthiness on an
+    array; check by length and coerce each element to float, accepting list/tuple/ndarray
+    /any sequence alike.
+    """
+    if vec is None:
+        return False
+    try:
+        if len(vec) != EMBED_DIM:
+            return False
+        vals = [float(x) for x in vec]
+    except (TypeError, ValueError):
+        return False
+    return all(math.isfinite(x) for x in vals) and any(x != 0.0 for x in vals)
 
 
 async def embed(text: str, *, input_type: str) -> list[float]:

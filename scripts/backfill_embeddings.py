@@ -34,9 +34,9 @@ async def main(do_all: bool, dry_run: bool) -> None:
         rows = await con.fetch("SELECT id, content, embedding FROM household_facts ORDER BY id")
         bad, fixed = 0, 0
         for r in rows:
-            vec = r["embedding"]
-            # asyncpg returns a vector as a list/np array when valid, None when NULL.
-            ok = vec is not None and embeddings.is_valid(list(vec))
+            # pgvector decodes a stored vector to a numpy ndarray (None when NULL);
+            # is_valid handles ndarray/list/None directly, so pass it straight through.
+            ok = embeddings.is_valid(r["embedding"])
             if ok and not do_all:
                 continue
             if not ok:

@@ -121,12 +121,14 @@ async def update_fact(fact_id, category, content, embedding) -> None:
 
 
 async def search_facts(embedding, k: int = 4):
-    # Skip rows with no embedding so a legacy NULL/bad row can't crowd out a real
-    # match (those should be backfilled via scripts/backfill_embeddings.py). No
-    # distance cutoff — return top-k and let the model judge relevance.
+    # Family-wide: NO member_id/category scope — any member can recall any household
+    # fact. Only skip rows with no embedding so a legacy NULL row can't crowd out a
+    # real match (those get backfilled via scripts/backfill_embeddings.py). No distance
+    # cutoff — return top-k and let the model judge relevance. id is selected so the
+    # recall path can log which fact matched.
     async with _pool.acquire() as con:
         return await con.fetch(
-            "SELECT category, content, embedding <=> $1 AS distance "
+            "SELECT id, category, content, embedding <=> $1 AS distance "
             "FROM household_facts WHERE embedding IS NOT NULL "
             "ORDER BY embedding <=> $1 LIMIT $2",
             embedding, k,
