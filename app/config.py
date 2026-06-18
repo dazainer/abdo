@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str | None = None
     tts_voice_id: str | None = None             # an Egyptian-accent voice (Voice Library or a clone)
     tts_model: str = "eleven_flash_v2_5"        # fastest (~75ms) and half the credit cost
-    stt_model: str = "scribe_v1"                # scribe_v2 also exists; swap via env if desired
+    stt_model: str = "scribe_v2"                # scribe_v1 is deprecated/removed 2026-07-09
     stt_language: str = "ar"                    # Arabic (expect code-switching with English)
     voice_replies: bool = True                  # reply with voice when the user sent voice
     reply_text_alongside_voice: bool = True     # send text first (instant), then the voice note

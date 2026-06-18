@@ -17,8 +17,26 @@ import httpx
 from app.config import settings
 
 
+# Steadier, slightly slower delivery for a clearer Cairene pace. speed ranges
+# 0.7–1.2 (default 1.0); 0.9 slows Abdo without the quality drop below ~0.85.
+_VOICE_SETTINGS = {"stability": 0.55, "similarity_boost": 0.75, "speed": 0.9}
+
+# Flash v2.5 deliberately skips number normalization, so digit strings ("2013",
+# phone numbers, amounts) come out wrong. The voice-mode prompt writes ordinary
+# numbers as words, but as a backstop ANY reply that still carries a digit is
+# synthesized on multilingual_v2 (which pronounces numbers correctly) — a little
+# extra latency only on number-bearing replies.
+_NUMERIC_MODEL = "eleven_multilingual_v2"
+
+
+def _pick_model(text: str) -> str:
+    """Flash by default; multilingual_v2 for any digit-bearing reply (see above)."""
+    return _NUMERIC_MODEL if any(c.isdigit() for c in text) else settings.tts_model
+
+
 async def synthesize(text: str) -> bytes:
     """Egyptian Arabic text -> OGG/Opus bytes ready for sendVoice."""
+    model = _pick_model(text)
     async with httpx.AsyncClient(timeout=60) as client:
         r = await client.post(
             f"https://api.elevenlabs.io/v1/text-to-speech/{settings.tts_voice_id}",
@@ -27,7 +45,7 @@ async def synthesize(text: str) -> bytes:
                 "accept": "audio/mpeg",
                 "content-type": "application/json",
             },
-            json={"text": text, "model_id": settings.tts_model},
+            json={"text": text, "model_id": model, "voice_settings": _VOICE_SETTINGS},
         )
         r.raise_for_status()
         mp3 = r.content

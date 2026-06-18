@@ -1,3 +1,5 @@
+import math
+
 import cohere
 from app.config import settings
 
@@ -5,6 +7,18 @@ from app.config import settings
 _client = cohere.AsyncClientV2(api_key=settings.cohere_api_key)
 EMBED_MODEL = "embed-v4.0"
 EMBED_DIM = 1024
+
+
+def is_valid(vec) -> bool:
+    """A storable embedding is exactly EMBED_DIM finite, non-all-zero floats. Guards
+    against storing a fact with a NULL/wrong-dim/zero vector, which silently wrecks
+    recall (the original wifi-recall miss) — better to fail loudly than store junk."""
+    return (
+        isinstance(vec, (list, tuple))
+        and len(vec) == EMBED_DIM
+        and all(isinstance(x, (int, float)) and math.isfinite(x) for x in vec)
+        and any(x != 0 for x in vec)
+    )
 
 
 async def embed(text: str, *, input_type: str) -> list[float]:

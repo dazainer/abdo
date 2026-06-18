@@ -1,12 +1,36 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from app import db, embeddings, calendar_svc, geo
 from app.config import settings
 
 log = logging.getLogger("abdo")
+
+# A re-stated fact this close (cosine distance) to an existing one is treated as
+# the same fact and updated in place, not inserted again — stops the double-save
+# (the real fact + a garbled "the wifi password" fragment).
+FACT_DEDUP_DISTANCE = 0.15
+
+
+def _format_event(e: dict) -> str:
+    """Render an event with its weekday resolved in CODE, never by the model — the
+    'cairo on Friday' drift came from the model guessing weekdays. Start may be an
+    all-day date ('2026-06-19') or a timed dateTime."""
+    start = e["start"]
+    has_time = "T" in start
+    try:
+        dt = datetime.fromisoformat(start)
+    except ValueError:
+        d = date.fromisoformat(start[:10])
+        dt = datetime(d.year, d.month, d.day)
+    when = dt.strftime("%A %d %B %Y")
+    if has_time:
+        when += f" at {dt.strftime('%H:%M')}"
+    else:
+        when += " (all day)"
+    return f"- {when}: {e['summary']} (id: {e['id']})"
 
 
 # Past this many minutes since the last ping, a live-location share has almost
@@ -226,6 +250,47 @@ TOOLS = [
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "add_order",
+        "description": (
+            "Record an incoming online order/delivery so anyone home knows what's coming. "
+            "Use when someone says a package or order is arriving."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "description": "What the order is."},
+                "day": {"type": "string",
+                        "description": ("When it's expected: a weekday, 'today'/'tomorrow', or an "
+                                        "exact date. Pass it as said; resolved server-side.")},
+                "ordered_by": {"type": "string", "description": "Name of who placed it, if known."},
+                "paid": {"type": "boolean", "description": "true if prepaid, false if cash on delivery."},
+                "tip_note": {"type": "string", "description": "Tip set aside, e.g. '50 EGP', if mentioned."},
+            },
+            "required": ["description", "day", "paid"],
+        },
+    },
+    {
+        "name": "get_orders",
+        "description": (
+            "List pending orders/deliveries expected on a day (default today). Use when someone "
+            "asks if any orders are coming — e.g. the doorbell rang."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"day": {"type": "string", "description": "Which day; defaults to today."}},
+            "required": [],
+        },
+    },
+    {
+        "name": "mark_order_arrived",
+        "description": "Mark an order as arrived once it's been received.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"order_id": {"type": "integer"}},
+            "required": ["order_id"],
+        },
+    },
 ]
 
 
@@ -254,8 +319,22 @@ async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
         return "Recorded: dogs fed today." if fresh else "Already marked fed today."
 
     if name == "remember_fact":
-        vec = await embeddings.embed(tool_input["content"], input_type="search_document")
-        await db.add_fact(tool_input["category"], tool_input["content"], vec, member_id)
+        content, category = tool_input["content"], tool_input["category"]
+        vec = await embeddings.embed(content, input_type="search_document")
+        if not embeddings.is_valid(vec):
+            # Never store a fact with a junk embedding — that's the silent recall
+            # killer. Fail honestly so the model tells the user instead of "saved".
+            log.error("remember_fact: invalid embedding (dim=%s) for %r",
+                      len(vec) if hasattr(vec, "__len__") else "?", content)
+            return ("ERROR: couldn't store that right now (embedding failed). Tell the "
+                    "user plainly it wasn't saved and to try again; do NOT claim it was saved.")
+        # Dedup: if a near-identical fact already exists, update it in place rather
+        # than inserting a second row (the wifi double-save).
+        near = await db.nearest_fact(vec)
+        if near and near["distance"] is not None and near["distance"] < FACT_DEDUP_DISTANCE:
+            await db.update_fact(near["id"], category, content, vec)
+            return "Updated the existing fact (it was already on file)."
+        await db.add_fact(category, content, vec, member_id)
         return "Stored."
 
     if name == "recall_facts":
@@ -280,7 +359,7 @@ async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
                     "empty, and do NOT create or change any event based on this.")
         if not events:
             return "No events on the shared calendar in that window."
-        return "\n".join(f"- {e['start']}: {e['summary']} (id: {e['id']})" for e in events)
+        return "\n".join(_format_event(e) for e in events)
 
     if name == "create_event":
         if not calendar_svc.is_configured():
@@ -364,5 +443,46 @@ async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
     if name == "clear_shopping_list":
         n = await db.clear_shopping_list(member_id)
         return f"Cleared {n} item(s) from the shopping list." if n else "The list was already empty."
+
+    if name == "add_order":
+        try:
+            expected_on = calendar_svc.resolve_date(tool_input["day"])
+        except ValueError:
+            return (f"ERROR: couldn't understand the day '{tool_input['day']}'. Ask the user "
+                    f"which day (a weekday, today/tomorrow, or a date); do NOT guess one.")
+        ordered_by = None
+        if tool_input.get("ordered_by"):
+            ordered_by = await db.get_member_id_by_name(tool_input["ordered_by"])
+        oid = await db.add_order(
+            tool_input["description"], expected_on, ordered_by,
+            tool_input["paid"], tool_input.get("tip_note"),
+        )
+        pay = "prepaid" if tool_input["paid"] else "cash on delivery"
+        return (f"Recorded order #{oid}: {tool_input['description']} expected "
+                f"{expected_on.strftime('%A %d %B')} ({pay}).")
+
+    if name == "get_orders":
+        day = tool_input.get("day") or "today"
+        try:
+            expected_on = calendar_svc.resolve_date(day)
+        except ValueError:
+            return (f"ERROR: couldn't understand the day '{day}'. Ask which day; do NOT guess.")
+        rows = await db.get_orders(expected_on)
+        if not rows:
+            return f"No pending orders expected {expected_on.strftime('%A %d %B')}."
+        lines = []
+        for r in rows:
+            who = r["ordered_by_name"] or "someone"
+            pay = "prepaid" if r["paid"] else "cash on delivery"
+            tip = f", tip ready: {r['tip_note']}" if r["tip_note"] else ""
+            lines.append(f"- #{r['id']} {r['description']} (ordered by {who}) — {pay}{tip}")
+        return "\n".join(lines)
+
+    if name == "mark_order_arrived":
+        ok = await db.mark_order_arrived(tool_input["order_id"])
+        if ok:
+            return f"Marked order #{tool_input['order_id']} as arrived."
+        return (f"No pending order #{tool_input['order_id']} found. Do NOT claim it arrived; "
+                f"call get_orders to see the real ids.")
 
     return f"Unknown tool: {name}"

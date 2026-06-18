@@ -47,11 +47,53 @@ class FakeDB:
         self.logged.append((member_id, chat_id, role, content))
 
     async def add_fact(self, category, content, embedding, created_by):
-        self.facts.append({"category": category, "content": content})
+        self._fact_seq = getattr(self, "_fact_seq", 0) + 1
+        self.facts.append({"id": self._fact_seq, "category": category,
+                           "content": content, "embedding": embedding})
+
+    async def nearest_fact(self, embedding):
+        # Fake embeddings are deterministic per text, so identical content yields an
+        # identical vector — a faithful stand-in for pgvector's near-zero distance.
+        for f in reversed(self.facts):
+            if f["embedding"] == embedding:
+                return {"id": f["id"], "content": f["content"], "distance": 0.0}
+        if self.facts:
+            last = self.facts[-1]
+            return {"id": last["id"], "content": last["content"], "distance": 1.0}
+        return None
+
+    async def update_fact(self, fact_id, category, content, embedding):
+        for f in self.facts:
+            if f["id"] == fact_id:
+                f.update(category=category, content=content, embedding=embedding)
 
     async def search_facts(self, embedding, k=4):
         # Embedding is faked, so just return what's stored (most-recent first).
         return list(reversed(self.facts))[:k]
+
+    async def get_member_id_by_name(self, name):
+        return {"zain": 1, "omar": 2}.get(name.lower())
+
+    async def add_order(self, description, expected_on, ordered_by, paid, tip_note):
+        self._order_seq = getattr(self, "_order_seq", 0) + 1
+        self.orders.append({"id": self._order_seq, "description": description,
+                            "expected_on": expected_on, "ordered_by": ordered_by,
+                            "paid": paid, "tip_note": tip_note, "status": "pending"})
+        return self._order_seq
+
+    async def get_orders(self, expected_on):
+        names = {1: "Zain", 2: "Omar"}
+        return [{"id": o["id"], "description": o["description"], "paid": o["paid"],
+                 "tip_note": o["tip_note"], "ordered_by_name": names.get(o["ordered_by"])}
+                for o in self.orders
+                if o["status"] == "pending" and o["expected_on"] == expected_on]
+
+    async def mark_order_arrived(self, order_id):
+        for o in self.orders:
+            if o["id"] == order_id and o["status"] == "pending":
+                o["status"] = "arrived"
+                return True
+        return False
 
     async def upsert_location(self, member_id, lat, lng):
         self.locations[member_id] = (lat, lng)
@@ -89,11 +131,13 @@ fake = FakeDB()
 fake.shopping = []       # list of {item, qty, bought}
 fake.locations = {}      # member_id -> (lat, lng), written by upsert
 fake._loc_rows = {}      # name.lower() -> asyncpg-style row dict, for reads
+fake.orders = []         # list of order dicts
 for name in ("recent_messages", "roster_string", "dogs_fed_today",
-             "mark_dogs_fed", "log_message", "add_fact", "search_facts",
-             "upsert_location", "get_location", "get_all_locations",
-             "add_shopping_item", "get_shopping_list", "mark_item_bought",
-             "clear_shopping_list"):
+             "mark_dogs_fed", "log_message", "add_fact", "nearest_fact",
+             "update_fact", "search_facts", "upsert_location", "get_location",
+             "get_all_locations", "add_shopping_item", "get_shopping_list",
+             "mark_item_bought", "clear_shopping_list", "get_member_id_by_name",
+             "add_order", "get_orders", "mark_order_arrived"):
     setattr(db, name, getattr(fake, name))
 
 
@@ -103,7 +147,11 @@ embed_calls = []
 
 async def fake_embed(text, *, input_type):
     embed_calls.append(input_type)
-    return [0.0] * embeddings.EMBED_DIM   # right shape, content irrelevant to fakes
+    # Deterministic per text and non-zero, so embeddings.is_valid() passes and
+    # identical content produces an identical vector (lets the dedup path fire).
+    import hashlib
+    h = hashlib.sha256(text.encode("utf-8")).digest()
+    return [(h[i % len(h)] / 255.0) + 0.001 for i in range(embeddings.EMBED_DIM)]
 
 
 embeddings.embed = fake_embed
@@ -264,6 +312,107 @@ async def test_recall_empty():
     fake.facts.clear()
     out = await tools.run_tool("recall_facts", {"query": "anything"}, member_id=1)
     check("honest 'no facts' when store is empty", out == "No matching household facts found.")
+
+
+async def test_store_dedup():
+    print("Scenario: re-stating a fact updates the row, never duplicates (Fix 1d)")
+    fake.facts.clear()
+    out = await tools.run_tool(
+        "remember_fact",
+        {"content": "The Wi-Fi password is koki2013.", "category": "wifi"}, member_id=1)
+    check("first store inserts", out == "Stored." and len(fake.facts) == 1)
+    out = await tools.run_tool(
+        "remember_fact",
+        {"content": "The Wi-Fi password is koki2013.", "category": "wifi"}, member_id=1)
+    check("re-stating the SAME fact updates in place (no second row)",
+          "Updated" in out and len(fake.facts) == 1)
+    await tools.run_tool(
+        "remember_fact",
+        {"content": "The spare key is with the bawab.", "category": "location_of_things"}, member_id=1)
+    check("a genuinely different fact still inserts", len(fake.facts) == 2)
+
+
+async def test_store_guard_invalid_embedding():
+    print("Scenario: a junk embedding is never stored as a fact (Fix 1c guard)")
+    fake.facts.clear()
+    real_embed = embeddings.embed
+
+    async def bad_embed(text, *, input_type):
+        return [0.0] * embeddings.EMBED_DIM    # all-zero => invalid
+
+    embeddings.embed = bad_embed
+    try:
+        out = await tools.run_tool(
+            "remember_fact", {"content": "x", "category": "misc"}, member_id=1)
+        check("invalid embedding returns an error, not 'Stored'", out.startswith("ERROR"))
+        check("nothing was written on a bad embedding", len(fake.facts) == 0)
+    finally:
+        embeddings.embed = real_embed
+
+
+async def test_calendar_weekday_read():
+    print("Scenario: calendar reads carry a code-resolved weekday (Fix 2)")
+    global _fake_events
+    # 2026-06-19 is a Friday; 2026-06-20 is a Saturday.
+    _fake_events = [
+        {"id": "evt1", "start": "2026-06-19", "summary": "Trip to Cairo"},
+        {"id": "evt2", "start": "2026-06-20T19:00:00", "summary": "Family dinner"},
+    ]
+    calendar_svc.is_configured = lambda: True
+    out = await tools.run_tool("get_calendar", {}, member_id=1)
+    check("all-day event shows its true weekday (Friday)", "Friday 19 June" in out)
+    check("timed event shows weekday + time (Saturday ... 19:00)",
+          "Saturday 20 June" in out and "at 19:00" in out)
+    check("event id still exposed for edits", "evt1" in out and "evt2" in out)
+
+
+async def test_orders():
+    print("Scenario: orders add/get/arrive with server-side date resolution (Fix 5)")
+    fake.orders = []
+    out = await tools.run_tool(
+        "add_order",
+        {"description": "Amazon package", "day": "tomorrow", "paid": False,
+         "ordered_by": "Zain", "tip_note": "50 EGP"}, member_id=1)
+    check("add_order confirms with id + COD", "#1" in out and "cash on delivery" in out)
+    tomorrow = (datetime.now(ZoneInfo(settings.timezone)) + timedelta(days=1)).date()
+    check("day was resolved server-side to a real date",
+          fake.orders[0]["expected_on"] == tomorrow)
+    check("orderer name mapped to a member id", fake.orders[0]["ordered_by"] == 1)
+
+    out = await tools.run_tool("get_orders", {"day": "tomorrow"}, member_id=1)
+    check("get_orders lists the pending order with who/pay/tip",
+          "Amazon package" in out and "Zain" in out and "cash on delivery" in out and "50 EGP" in out)
+
+    out = await tools.run_tool("get_orders", {}, member_id=1)   # defaults to today
+    check("a different day (today) shows no orders", "No pending orders" in out)
+
+    out = await tools.run_tool("mark_order_arrived", {"order_id": 1}, member_id=1)
+    check("mark_order_arrived confirms", "arrived" in out)
+    out = await tools.run_tool("get_orders", {"day": "tomorrow"}, member_id=1)
+    check("an arrived order leaves the pending list", "No pending orders" in out)
+
+    out = await tools.run_tool("mark_order_arrived", {"order_id": 999}, member_id=1)
+    check("marking a non-existent order errors, never fakes success", out.startswith("No pending order"))
+
+
+def test_tts_model_routing():
+    print("Scenario: digit-bearing replies route to multilingual_v2 (Fix 3b)")
+    from app import tts
+    check("a worded reply stays on Flash",
+          tts._pick_model("تمام، الساعة سبعة") == settings.tts_model)
+    check("a reply with a digit routes to multilingual_v2",
+          tts._pick_model("الساعة 7") == "eleven_multilingual_v2")
+
+
+def test_grounding_and_dialect_prompt():
+    print("Scenario: grounding rules + Egyptian dialect are in the system prompt")
+    from app.prompts import build_system_prompt
+    p = build_system_prompt("Zain", "member", "Zain (member)")
+    check("grounding mandates recall_facts before 'don't know'", "MUST call recall_facts" in p)
+    check("grounding forbids guessing weekdays", "never guess or compute a weekday" in p)
+    check("calendar confirms exactly once", "exactly ONCE" in p)
+    check("Egyptian dialect glossary present (معنديش)", "معنديش" in p)
+    check("orders capability described", "orders/deliveries" in p)
 
 
 async def test_where_is():
@@ -595,13 +744,17 @@ async def main():
     await test_mark_fed_then_status()
     await test_remember_and_recall_fact()
     await test_recall_empty()
+    await test_store_dedup()
+    await test_store_guard_invalid_embedding()
     await test_where_is()
     await test_get_calendar()
+    await test_calendar_weekday_read()
     await test_calendar_write()
     test_date_resolution()
     await test_calendar_read_guard()
     await test_calendar_not_found_guard()
     await test_shopping_list()
+    await test_orders()
     await test_calendar_runs_on_haiku()
     await test_voice_brain_threads_flag()
     await test_empty_reply_fallback()
@@ -610,6 +763,8 @@ async def main():
     await test_tool_dispatch_unknown()
     test_parse_update()
     test_voice_mode_prompt()
+    test_tts_model_routing()
+    test_grounding_and_dialect_prompt()
     test_mark_result_parsing()
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

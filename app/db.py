@@ -35,6 +35,15 @@ async def roster_string() -> str:
     return ", ".join(f"{r['name']} ({r['role']})" for r in rows) or "the family"
 
 
+async def get_member_id_by_name(name: str):
+    """Resolve a spoken name to a member id (case-insensitive), or None."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "SELECT id FROM family_members WHERE name ILIKE $1 ORDER BY id LIMIT 1", name
+        )
+    return row["id"] if row else None
+
+
 async def log_message(member_id, chat_id, role, content) -> None:
     async with _pool.acquire() as con:
         await con.execute(
@@ -88,11 +97,38 @@ async def add_fact(category, content, embedding, created_by) -> None:
         )
 
 
+async def nearest_fact(embedding):
+    """The single closest stored fact to this embedding, with its cosine distance,
+    for the dedup check before inserting. Returns a row (id, content, distance) or None."""
+    async with _pool.acquire() as con:
+        return await con.fetchrow(
+            "SELECT id, content, embedding <=> $1 AS distance "
+            "FROM household_facts WHERE embedding IS NOT NULL "
+            "ORDER BY embedding <=> $1 LIMIT 1",
+            embedding,
+        )
+
+
+async def update_fact(fact_id, category, content, embedding) -> None:
+    """Overwrite an existing fact in place (used when a re-stated fact is a near
+    duplicate of one we already have — update, never insert a second row)."""
+    async with _pool.acquire() as con:
+        await con.execute(
+            "UPDATE household_facts SET category = $2, content = $3, embedding = $4 "
+            "WHERE id = $1",
+            fact_id, category, content, embedding,
+        )
+
+
 async def search_facts(embedding, k: int = 4):
+    # Skip rows with no embedding so a legacy NULL/bad row can't crowd out a real
+    # match (those should be backfilled via scripts/backfill_embeddings.py). No
+    # distance cutoff — return top-k and let the model judge relevance.
     async with _pool.acquire() as con:
         return await con.fetch(
             "SELECT category, content, embedding <=> $1 AS distance "
-            "FROM household_facts ORDER BY embedding <=> $1 LIMIT $2",
+            "FROM household_facts WHERE embedding IS NOT NULL "
+            "ORDER BY embedding <=> $1 LIMIT $2",
             embedding, k,
         )
 
@@ -169,3 +205,40 @@ async def clear_shopping_list(member_id) -> int:
             member_id,
         )
     return int(result.split()[-1])   # "UPDATE 3" -> 3
+
+
+# --- incoming orders / deliveries (Fix 1) ---
+
+async def add_order(description, expected_on, ordered_by, paid, tip_note):
+    """Record an incoming order. `expected_on` is a resolved date, `ordered_by` a
+    member id (or None). Returns the new order id."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "INSERT INTO orders (description, expected_on, ordered_by, paid, tip_note) "
+            "VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            description, expected_on, ordered_by, paid, tip_note,
+        )
+    return row["id"]
+
+
+async def get_orders(expected_on):
+    """Pending orders expected on a given date, with the orderer's name joined in."""
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT o.id, o.description, o.paid, o.tip_note, m.name AS ordered_by_name "
+            "FROM orders o LEFT JOIN family_members m ON m.id = o.ordered_by "
+            "WHERE o.status = 'pending' AND o.expected_on = $1 "
+            "ORDER BY o.created_at",
+            expected_on,
+        )
+
+
+async def mark_order_arrived(order_id) -> bool:
+    """Flip a pending order to 'arrived'. Returns False if no such pending order."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "UPDATE orders SET status = 'arrived' "
+            "WHERE id = $1 AND status = 'pending' RETURNING id",
+            order_id,
+        )
+    return row is not None

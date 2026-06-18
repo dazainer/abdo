@@ -70,6 +70,21 @@ CREATE TABLE shopping_items (
 -- At most one open (unbought) entry per item name, case-insensitive.
 CREATE UNIQUE INDEX uniq_open_shopping_item ON shopping_items (lower(item)) WHERE NOT bought;
 
+-- Incoming online orders / deliveries (Fix 1): so whoever's home when the
+-- doorbell rings knows what's coming, whether it's prepaid or cash-on-delivery,
+-- and whether a tip was set aside.
+CREATE TABLE orders (
+    id           BIGSERIAL PRIMARY KEY,
+    description  TEXT NOT NULL,                    -- "Amazon package", "Breadfast groceries"
+    expected_on  DATE NOT NULL,
+    ordered_by   INTEGER REFERENCES family_members(id),
+    paid         BOOLEAN NOT NULL DEFAULT false,   -- true = prepaid, false = cash on delivery
+    tip_note     TEXT,                             -- "50 EGP set aside", or NULL
+    status       TEXT NOT NULL DEFAULT 'pending',  -- pending | arrived | cancelled
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_orders_expected ON orders (expected_on);
+
 -- Reminders / nudges (future)
 CREATE TABLE reminders (
     id          BIGSERIAL PRIMARY KEY,
