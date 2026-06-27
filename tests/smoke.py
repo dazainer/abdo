@@ -221,6 +221,7 @@ class FakeMessages:
         self.calls.append((model, [m["role"] for m in messages]))
         self.systems = getattr(self, "systems", [])
         self.systems.append(system)
+        self.last_tools = tools           # the toolset offered to the model this call
         resp = self._script[self._i]
         self._i += 1
         return resp
@@ -759,6 +760,61 @@ def test_parse_update():
     check("ignores empty update", telegram.parse_update({}) is None)
 
 
+async def test_web_search_offered_and_household_routes_to_recall():
+    print("Scenario: web search offered for current info; household Q routes to recall_facts")
+    # Current-info question: the server-side web_search tool must be in the toolset offered
+    # to the model (Claude runs the search server-side and answers in the same turn, so
+    # there's nothing for the client loop to dispatch — we just answer with text).
+    brain.client = FakeClient([
+        SimpleNamespace(stop_reason="end_turn",
+                        content=[_text_block("الجو النهاردة حر شوية، حوالي تلاتين درجة.")]),
+    ])
+    reply = await brain.think(MEMBER, chat_id=99, user_text="الجو عامل إيه النهاردة في القاهرة؟")
+    offered = {t.get("name") for t in brain.client.messages.last_tools}
+    check("web_search server tool is offered to the model", "web_search" in offered)
+    ws = next(t for t in brain.client.messages.last_tools if t.get("name") == "web_search")
+    check("web_search uses a server-tool type (web_search_*)",
+          str(ws.get("type", "")).startswith("web_search_"))
+    check("custom household tools still offered alongside it (recall_facts)",
+          "recall_facts" in offered)
+    check("current-info question got a normal text answer", isinstance(reply, str) and reply)
+
+    # A household question still routes to the client-side recall_facts tool, NOT the web.
+    fake.facts.clear()
+    embed_calls.clear()
+    brain.client = FakeClient([
+        SimpleNamespace(stop_reason="tool_use", content=[
+            SimpleNamespace(type="tool_use", name="recall_facts",
+                            input={"query": "wifi password"}, id="r1")]),
+        SimpleNamespace(stop_reason="end_turn", content=[_text_block("الباسورد بتاع الواي فاي ...")]),
+    ])
+    await brain.think(MEMBER, chat_id=99, user_text="الواي فاي بتاعنا الباسورد إيه؟")
+    # recall_facts ran (its embed uses input_type=search_query) — proves household → recall.
+    check("household question routed to recall_facts (client tool), not the web",
+          embed_calls == ["search_query"])
+
+
+def test_web_search_prompt_guidance():
+    print("Scenario: prompt tells Abdo to search only for current/external info, recall first")
+    from app.prompts import build_system_prompt
+    p = build_system_prompt("Zain", "member", "Zain (member)")
+    check("web search capability described", "search the web" in p)
+    check("web search defers to household memory first (recall_facts)", "recall_facts" in p)
+
+
+def test_dictation_carveout_prompt():
+    print("Scenario: voice prompt drops filler/uhhs when dictating literal strings")
+    from app.prompts import build_system_prompt
+    voice_p = build_system_prompt("Zain", "member", "Zain (member)", voice=True)
+    text_p = build_system_prompt("Zain", "member", "Zain (member)")
+    check("voice prompt carves out exact-dictation cases", "must be heard" in voice_p.lower()
+          or "heard EXACTLY" in voice_p)
+    check("carve-out names a password as a clean-dictation case", "password" in voice_p)
+    check("carve-out drops the disfluency for codes", "no \"uhh\"" in voice_p or "no filler" in voice_p)
+    check("dictation carve-out is voice-only (text path unaffected)",
+          "accuracy beats personality" not in text_p)
+
+
 def test_voice_mode_prompt():
     print("Scenario: voice flag shortens the prompt for the ear (text path unchanged)")
     from app.prompts import build_system_prompt
@@ -800,6 +856,9 @@ async def main():
     await test_tool_failure_degrades()
     await test_tool_loop_terminates()
     await test_tool_dispatch_unknown()
+    await test_web_search_offered_and_household_routes_to_recall()
+    test_web_search_prompt_guidance()
+    test_dictation_carveout_prompt()
     test_parse_update()
     test_voice_mode_prompt()
     test_tts_model_routing()

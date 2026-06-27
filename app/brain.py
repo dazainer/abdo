@@ -19,6 +19,20 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 HAIKU = "claude-haiku-4-5-20251001"
 
 
+# Server-side web search (Anthropic-hosted): Claude runs the query and synthesizes
+# the answer in the SAME turn, so it's just another entry in the tools list — there's
+# no client-side handler in the tool loop (results come back as server_tool_use /
+# web_search_tool_result blocks, not a client tool_use the loop has to run). `max_uses`
+# caps searches per turn to keep token cost down at family scale. Haiku 4.5 isn't a
+# dynamic-filtering model, so we pin the stable _20250305 version (GA — no beta header).
+WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 3}
+
+# Custom (client-side) tools + the server-side web search, in one stable list. Kept as
+# a module constant so the tool set — which renders at the front of the prompt — stays
+# byte-identical across requests and doesn't needlessly bust the prompt cache.
+ALL_TOOLS = TOOLS + [WEB_SEARCH_TOOL]
+
+
 # Safety cap on the tool loop: bounds worst-case latency and API cost, and
 # guarantees the loop terminates even if the model keeps emitting tool calls.
 # Legit multi-step turns (find id -> delete -> move) use only a handful.
@@ -45,9 +59,16 @@ async def think(member, chat_id: int, user_text: str, voice: bool = False) -> st
             model=HAIKU,
             max_tokens=600,
             system=system,
-            tools=TOOLS,
+            tools=ALL_TOOLS,
             messages=messages,
         )
+
+        if resp.stop_reason == "pause_turn":
+            # A server-side tool (web_search) hit its internal iteration cap mid-turn.
+            # Re-send the assistant turn so the server resumes where it left off — do
+            # NOT add a user "continue" message; the trailing server_tool_use is the cue.
+            messages.append({"role": "assistant", "content": resp.content})
+            continue
 
         if resp.stop_reason == "tool_use":
             messages.append({"role": "assistant", "content": resp.content})
