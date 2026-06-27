@@ -17,9 +17,9 @@ import httpx
 from app.config import settings
 
 
-# Steadier, slightly slower delivery for a clearer Cairene pace. speed ranges
-# 0.7–1.2 (default 1.0); 0.9 slows Abdo without the quality drop below ~0.85.
-_VOICE_SETTINGS = {"stability": 0.55, "similarity_boost": 0.75, "speed": 0.9}
+# Steadier delivery for a clear Cairene pace. speed ranges 0.7–1.2 (default 1.0);
+# 1.0 is a natural conversational pace (~12% quicker than the earlier 0.9).
+_VOICE_SETTINGS = {"stability": 0.55, "similarity_boost": 0.75, "speed": 1.0}
 
 # Flash v2.5 deliberately skips number normalization, so digit strings ("2013",
 # phone numbers, amounts) come out wrong. The voice-mode prompt writes ordinary
