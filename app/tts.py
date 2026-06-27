@@ -54,9 +54,15 @@ async def synthesize(text: str) -> bytes:
 
 
 def _mp3_to_ogg(mp3: bytes) -> bytes:
-    """Transcode MP3 -> OGG/Opus (Telegram voice notes must be OGG/Opus)."""
+    """Transcode MP3 -> OGG/Opus (Telegram voice notes must be OGG/Opus).
+
+    `volume=2.0` doubles amplitude (~+100% loudness); ElevenLabs output sits well
+    below full scale and was too quiet on phones. `alimiter` catches the now-louder
+    peaks so the boost stays clean instead of clipping into distortion.
+    """
     p = subprocess.run(
-        ["ffmpeg", "-i", "pipe:0", "-c:a", "libopus", "-b:a", "32k", "-f", "ogg", "pipe:1"],
+        ["ffmpeg", "-i", "pipe:0", "-af", "volume=2.0,alimiter=limit=0.97",
+         "-c:a", "libopus", "-b:a", "32k", "-f", "ogg", "pipe:1"],
         input=mp3, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True,
     )
     return p.stdout
