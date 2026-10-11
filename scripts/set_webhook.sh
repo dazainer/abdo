@@ -11,10 +11,18 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Load .env (TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, optionally APP_URL).
-if [[ -f .env ]]; then
-  set -a; source .env; set +a
-fi
+# Read only the keys this script needs from .env. Don't `source` the whole file:
+# values like GOOGLE_SERVICE_ACCOUNT_JSON aren't valid shell and break it.
+# Values already set in the environment win.
+env_get() {
+  [[ -f .env ]] || return 0
+  # `|| true`: a missing key (e.g. no APP_URL line) must not trip `set -e`/pipefail.
+  { grep -E "^$1=" .env || true; } | tail -n 1 | cut -d= -f2- \
+    | sed -E "s/[[:space:]]+#.*$//; s/^[\"']//; s/[\"'][[:space:]]*$//"
+}
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(env_get TELEGRAM_BOT_TOKEN)}"
+TELEGRAM_WEBHOOK_SECRET="${TELEGRAM_WEBHOOK_SECRET:-$(env_get TELEGRAM_WEBHOOK_SECRET)}"
+APP_URL="${APP_URL:-$(env_get APP_URL)}"
 
 APP_URL="${1:-${APP_URL:-}}"
 : "${APP_URL:?Pass the base Railway URL, e.g. scripts/set_webhook.sh https://abdo-prod.up.railway.app}"
