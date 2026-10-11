@@ -44,7 +44,7 @@ def _get_service():
 # The model must NEVER compute a date by arithmetic (it gets weekdays wrong, e.g.
 # "Wednesday" -> "18 June" when the 18th is a Thursday). Instead the model passes
 # the spoken day (a weekday name, today/tomorrow/..., next <weekday>, or an exact
-# date copied from the prompt's reference) and Python turns it into a real Cairo
+# date copied from the prompt's reference) and Python turns it into a real local
 # date here.
 
 # Python's date.weekday(): Monday=0 .. Sunday=6.
@@ -66,7 +66,7 @@ _DAY_AFTER = {"day after tomorrow", "the day after tomorrow", "overmorrow", "ba3
 
 
 def resolve_date(day_ref: str, *, now: datetime | None = None) -> date:
-    """Turn a spoken day reference into a concrete Cairo-local date.
+    """Turn a spoken day reference into a concrete local date (settings.timezone).
 
     Accepts an explicit ISO date ('2026-06-19'), today/tomorrow/day-after-tomorrow,
     a weekday name ('Saturday'/'السبت'/'sabt'), or 'next <weekday>'. Raises
@@ -115,7 +115,7 @@ def resolve_date(day_ref: str, *, now: datetime | None = None) -> date:
 
 def _parse_time(t: str) -> tuple[int, int]:
     """Parse a clock time into (hour, minute). Accepts 'HH', 'HH:MM', 'HH:MM:SS',
-    and a trailing am/pm. Times are 24-hour Cairo local unless am/pm is given."""
+    and a trailing am/pm. Times are 24-hour local unless am/pm is given."""
     t = (t or "").strip().lower().replace(" ", "")
     ampm = None
     if t.endswith("am"):
@@ -183,7 +183,7 @@ def get_event(event_id: str):
 
 def create_event(summary: str, day: str, time: str, end_time: str | None = None,
                  now: datetime | None = None):
-    """Create a timed event. `day` is a spoken day reference resolved to a Cairo
+    """Create a timed event. `day` is a spoken day reference resolved to a local
     date in Python; `time`/`end_time` are clock times (24h, HH:MM). The model never
     passes a computed date. end defaults to one hour after start. Blocking."""
     service = _get_service()

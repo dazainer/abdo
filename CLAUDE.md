@@ -7,10 +7,10 @@ through **Telegram** today; his own web app and an always-on room device are pla
 This file is the project's durable memory. The plan of record is **`docs/ROADMAP.md`**;
 phase-by-phase build briefs live in `docs/`.
 
-> **Transition in progress.** Abdo was built for the Khalil family in New Cairo. That
-> version is frozen at git tag **`egypt-final`** / branch **`egypt`** (specs archived in
-> `docs/egypt/`). Until Phase 5 is built, the code on `main` still reflects Egypt: Cairo
-> timezone default, dog feeding, orders, `family_members`, Haiku 4.5. Phase 5 changes all of that.
+> **History.** Abdo was first built for the Khalil family in New Cairo. That version is
+> frozen at git tag **`egypt-final`** / branch **`egypt`** (specs archived in `docs/egypt/`).
+> Phase 5 (the move to the suite) is **built on `main` but not yet deployed**: Railway
+> still runs the Egypt code until the cutover in `docs/abdo_phase5_rehome_spec.md` §1.
 
 ## The one principle that governs everything
 
@@ -24,27 +24,33 @@ channel (Telegram today; web app + room device later)
 
 Adding a feature = adding a tool definition (`tools.py`) + its backing query (`db.py`) + any
 tables (`schema.sql`). **Never refactor the core loop to add a feature: extend the tool set.**
-Channels are thin adapters; the brain never knows which channel a turn came from (beyond
-`voice=True` shortening replies for the ear). Phase 5 introduces `handle_turn` as the single
-entry point all channels call. Until then the Telegram webhook in `main.py` calls `brain.think` directly.
+Channels (`app/channels/`) are thin adapters: verify, identify the member, pick a `thread`
+key, call `turn.handle_turn`, deliver the reply. `handle_turn` is the single entry point: it
+runs `brain.think`, logs the turn **afterwards** (so history never holds the current message
+twice), and never raises. The brain only knows the channel as a label in its context, plus
+`voice=True` for shorter, spoken replies. History is keyed by `thread` (`tg:<chat_id>`,
+`web:<member_id>`, `room`); user turns reach the model prefixed with the speaker's name.
 
 ## Stack
 
 - Python 3.11+, **FastAPI** + uvicorn
 - **httpx** (Telegram, ElevenLabs), **anthropic** SDK (async), **asyncpg** (Postgres, raw SQL)
 - **pydantic-settings** (config); **Postgres + pgvector** on **Railway** (Hobby)
-- Brain: Anthropic API. Current code: `claude-haiku-4-5-20251001`. **Phase 5 target: `claude-haiku-5-5`**
-  with `effort: low` and prompt caching.
+- Brain: Anthropic API, `claude-haiku-5-5`, `effort: low`, prompt caching, server-side
+  `web_search_20250305`. Dependencies are pinned in `requirements.txt` (anthropic 0.109.1).
 - Embeddings: Cohere `embed-v4.0` at **1024 dims**.
 - Voice: ElevenLabs Scribe (STT) + Flash v2.5 (TTS); ffmpeg for OGG/Opus.
 
 ## Project layout
 
 ```
-app/  → main.py (FastAPI + Telegram webhook), config.py, db.py, telegram.py, brain.py,
-        tools.py, prompts.py, embeddings.py, calendar_svc.py, geo.py, stt.py, tts.py
-        (Phase 5 adds turn.py and channels/telegram.py; main.py becomes app setup only)
-schema.sql, seed.sql, requirements.txt, Procfile, nixpacks.toml, .env.example
+app/  → main.py (app setup + GET / version), channels/telegram.py (webhook adapter),
+        turn.py (handle_turn), brain.py (tool loop), prompts.py (static persona + dynamic
+        context), tools.py, db.py, telegram.py (Bot API client), calendar_svc.py,
+        embeddings.py, geo.py, stt.py, tts.py, config.py
+schema.sql, seed.example.sql (real seed.sql is gitignored), requirements.txt (pinned),
+Procfile, nixpacks.toml, .env.example, README.md (recruiter-facing)
+local/ → gitignored private notes: real roster, ids, calendar id, draft env
 scripts/ → set_webhook.sh, backfill_embeddings.py
 tests/smoke.py → offline smoke suite (network + DB faked)
 docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
@@ -62,7 +68,7 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   obviously fake examples in prompts and tests. Private details go in the gitignored `local/`
   folder (`local/household.md` has the real roster, ids, and calendar).
 - Abdo's persona lives in `prompts.py`. Behavior/voice changes go there, not scattered through the code.
-- Conversation history is persisted to `messages` (Phase 5: keyed by `thread`, with channel + speaker).
+- Conversation history is persisted to `messages`, keyed by `thread`, with channel, speaker, and modality.
 - Bump the `VERSION` marker in `main.py` (served at `GET /`) with each deploy-worthy change.
 - Run `.venv/bin/python tests/smoke.py` before committing; add scenarios for new tools.
 
@@ -78,13 +84,16 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
 - **Model strings drift**: confirm model IDs against Anthropic's docs before pinning. No model
   escalation to paper over grounding bugs: fix grounding in code and prompt (the Sonnet
   escalation was retired for this reason).
-- **Haiku 5.5 specifics (Phase 5)**: thinking is on by default and **counts toward
-  `max_tokens`** (keep it ≥ 2048); responses can start with `thinking` blocks (read by type);
-  pass assistant content back unmodified inside the tool loop; no `temperature`/`top_p`/`top_k`,
-  no prefill (both 400); handle `stop_reason == "refusal"` (no server-side fallback on Haiku).
-- **Prompt caching (Phase 5)**: the cached prefix is `tools` + the static persona block. Anything
-  per-request (speaker, date/time, roster, voice hint) goes in the second, uncached system
-  block. A timestamp in the static block silently kills every cache hit.
+- **Haiku 5.5 specifics**: thinking is on by default and **counts toward `max_tokens`**
+  (keep it ≥ 2048); responses can start with `thinking` blocks (read by type); pass assistant
+  content back unmodified inside the tool loop, and never change `system`/`tools` between rounds
+  of one turn; no `temperature`/`top_p`/`top_k`, no prefill (both 400); handle
+  `stop_reason == "refusal"` (no server-side fallback on Haiku). If grounding slips, raise
+  `brain.EFFORT` to `"medium"` before touching anything else.
+- **Prompt caching**: the cached prefix is `tools` + `prompts.STATIC_PERSONA` (~10K tokens).
+  Anything per-request (speaker, date/time, roster, channel, voice hint) goes in
+  `dynamic_context()`, after the cache point. A timestamp or name in the static block silently
+  kills every cache hit (the smoke suite guards this). Check `cache_read` in the `usage:` logs.
 - **Embedding dimension is fixed at 1024**: `household_facts.embedding` is `vector(1024)`.
   `search_document` on store, `search_query` on recall: never swap them. If recall misses a
   known fact, suspect a NULL/bad embedding row → `scripts/backfill_embeddings.py`.
@@ -107,15 +116,16 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   TTS cache (Phase 8) over new synthesis.
 - **`sendVoice` needs OGG/Opus; ElevenLabs returns MP3** → ffmpeg transcode (`nixpacks.toml`
   `aptPkgs`). An MP3 sent to `sendVoice` won't render as a voice note.
-- **Unpinned dependencies**: `requirements.txt` is unpinned until Phase 5 pins it. A rebuild can
-  pull a breaking major (e.g. `anthropic` 1.x → `httpx2`).
+- **Pinned dependencies**: bump versions deliberately and re-run the smoke suite. `anthropic`
+  1.x moves to `httpx2` and is a separate migration.
 
 ## Commands
 
 - Install: `pip install -r requirements.txt`
 - Run locally: `uvicorn app.main:app --reload`
 - Smoke tests: `.venv/bin/python tests/smoke.py`
-- Apply schema: run `schema.sql` against `DATABASE_URL`; seed members with `seed.sql`
+- Apply schema: `psql "$DATABASE_URL" -f schema.sql`; seed members with the gitignored
+  `seed.sql` (template: `seed.example.sql`); add a member's Telegram id later with an `UPDATE`
 - Register webhook: `scripts/set_webhook.sh https://<app>.up.railway.app` (reads `.env`; base URL only)
 - Telegram user id: message `@userinfobot`
 
@@ -126,9 +136,10 @@ The full plan, decisions log, and later-phase outlines are in `docs/ROADMAP.md`.
 
 - **Phases 1–4 (done, Egypt edition)** → `docs/egypt/`: Telegram bot, persona, identity, RAG
   facts, Google Calendar, live location, Egyptian voice, shopping list, orders, web search.
-- **Phase 5 (current)** → `docs/abdo_phase5_rehome_spec.md`: move to the Waterloo suite: fresh DB, suite
-  members, `America/Toronto`, persona rewrite, brain/channel separation (`handle_turn`),
-  speaker-aware logs, Haiku 5.5 + prompt caching, packages, new Telegram bot.
+- **Phase 5 (current: built, awaiting deploy + live checks)** → `docs/abdo_phase5_rehome_spec.md`:
+  move to the Waterloo suite: fresh DB, suite members, `America/Toronto`, persona rewrite,
+  brain/channel separation (`handle_turn`), speaker-aware logs, Haiku 5.5 + prompt caching,
+  packages, new Telegram bot, public-repo hygiene.
 - **Phase 6** → web app (PWA). **Phase 7** → scheduler, daily briefing, prayer times, timers,
   status, expenses, timetables, deadlines, groceries, polls, buses. **Phase 8** → always-on room
   device (wake word, speaker ID; prove on a Mac before buying hardware). Specs written when each starts.

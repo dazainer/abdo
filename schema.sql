@@ -1,94 +1,87 @@
--- Enable pgvector now so the Phase 2 knowledge base needs no migration later.
+-- Abdo schema (suite edition). Apply once to a fresh database:
+--   psql "$DATABASE_URL" -f schema.sql
+-- The Egypt-era schema lives at git tag egypt-final.
+
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- ---------- Phase 1 ----------
-
--- Family members
-CREATE TABLE family_members (
+-- Suite members. Four peers, no roles. telegram_id is nullable: a member can exist
+-- before they've messaged the bot, and web/room identities don't need Telegram.
+CREATE TABLE members (
     id           SERIAL PRIMARY KEY,
-    name         TEXT NOT NULL,                 -- display name, e.g. "Zain"
-    arabic_name  TEXT,                          -- optional, e.g. "زين"
-    telegram_id  BIGINT UNIQUE NOT NULL,        -- Telegram user id
-    role         TEXT NOT NULL DEFAULT 'member',-- 'parent' | 'child' | 'member'
-    birthdate    DATE,
-    prefs        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    name         TEXT NOT NULL UNIQUE,          -- what everyone calls them, e.g. "Mo"
+    full_name    TEXT,                          -- first + last name, for matching only
+    arabic_name  TEXT,                          -- e.g. "مو"
+    telegram_id  BIGINT UNIQUE,
+    prefs        JSONB NOT NULL DEFAULT '{}'::jsonb,   -- briefing time etc. (Phase 7)
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Conversation log (short-term memory + debugging)
+-- Conversation log (short-term memory + debugging), channel- and speaker-aware.
 CREATE TABLE messages (
-    id          BIGSERIAL PRIMARY KEY,
-    member_id   INTEGER REFERENCES family_members(id),
-    chat_id     BIGINT NOT NULL,                -- Telegram chat id (DM or group)
-    role        TEXT NOT NULL,                  -- 'user' | 'assistant'
-    content     TEXT NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                  BIGSERIAL PRIMARY KEY,
+    thread              TEXT NOT NULL,          -- 'tg:<chat_id>' | 'web:<member_id>' | 'room'
+    channel             TEXT NOT NULL,          -- 'telegram' | 'web' | 'room'
+    role                TEXT NOT NULL,          -- 'user' | 'assistant'
+    member_id           INTEGER REFERENCES members(id),
+        -- user turn: the speaker (NULL = unknown speaker on the room device)
+        -- assistant turn: the member being answered
+    speaker_confidence  REAL,                   -- room speaker-ID score; NULL when identity came from a login
+    modality            TEXT NOT NULL DEFAULT 'text',   -- 'text' | 'voice'
+    content             TEXT NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_messages_chat_time ON messages (chat_id, created_at DESC);
+CREATE INDEX idx_messages_thread_time ON messages (thread, created_at DESC);
 
--- Dog feeding: one row per day; "fed today" = a row exists for today (Cairo time)
-CREATE TABLE dog_feedings (
-    id          BIGSERIAL PRIMARY KEY,
-    fed_on      DATE NOT NULL DEFAULT (now() AT TIME ZONE 'Africa/Cairo')::date,
-    fed_by      INTEGER REFERENCES family_members(id),
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE UNIQUE INDEX uniq_dog_feeding_per_day ON dog_feedings (fed_on);
--- If you ever track the two dogs separately: add dog_id and key the index on (dog_id, fed_on).
-
--- ---------- Phase 2+ (create now, fill later) ----------
-
--- Household knowledge base for RAG (Phase 2)
+-- Household knowledge base (RAG). Cohere embed-v4.0 at 1024 dims: only swap to
+-- another 1024-dim embedder.
 CREATE TABLE household_facts (
     id          BIGSERIAL PRIMARY KEY,
     category    TEXT,                           -- 'contact' | 'wifi' | 'appliance' | ...
-    content     TEXT NOT NULL,                  -- the fact in natural language
-    embedding   vector(1024),                   -- match your embedding model's dimension
-    created_by  INTEGER REFERENCES family_members(id),
+    content     TEXT NOT NULL,                  -- the fact as one self-contained sentence
+    embedding   vector(1024),
+    created_by  INTEGER REFERENCES members(id),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Latest known location per member (Phase 3, via Telegram live location)
+-- Latest known location per member (Telegram live location).
 CREATE TABLE member_locations (
-    member_id   INTEGER PRIMARY KEY REFERENCES family_members(id),
+    member_id   INTEGER PRIMARY KEY REFERENCES members(id),
     lat         DOUBLE PRECISION NOT NULL,
     lng         DOUBLE PRECISION NOT NULL,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Shared shopping list: everyone contributes; "open" = not yet bought.
+-- Shared shopping list: "open" = not yet bought.
 CREATE TABLE shopping_items (
     id          BIGSERIAL PRIMARY KEY,
     item        TEXT NOT NULL,
-    qty         TEXT,                            -- free text, optional ("2 kilo")
-    added_by    INTEGER REFERENCES family_members(id),
+    qty         TEXT,                           -- free text, optional ("2 bags")
+    added_by    INTEGER REFERENCES members(id),
     bought      BOOLEAN NOT NULL DEFAULT false,
-    bought_by   INTEGER REFERENCES family_members(id),
+    bought_by   INTEGER REFERENCES members(id),
     bought_at   TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 -- At most one open (unbought) entry per item name, case-insensitive.
 CREATE UNIQUE INDEX uniq_open_shopping_item ON shopping_items (lower(item)) WHERE NOT bought;
 
--- Incoming online orders / deliveries (Fix 1): so whoever's home when the
--- doorbell rings knows what's coming, whether it's prepaid or cash-on-delivery,
--- and whether a tip was set aside.
-CREATE TABLE orders (
+-- Packages / deliveries for the suite.
+CREATE TABLE packages (
     id           BIGSERIAL PRIMARY KEY,
-    description  TEXT NOT NULL,                    -- "Amazon package", "Breadfast groceries"
-    expected_on  DATE NOT NULL,
-    ordered_by   INTEGER REFERENCES family_members(id),
-    paid         BOOLEAN NOT NULL DEFAULT false,   -- true = prepaid, false = cash on delivery
-    tip_note     TEXT,                             -- "50 EGP set aside", or NULL
-    status       TEXT NOT NULL DEFAULT 'pending',  -- pending | arrived | cancelled
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    description  TEXT NOT NULL,                 -- "desk lamp"
+    carrier      TEXT,                          -- "Amazon", "Canada Post", ...
+    owner_id     INTEGER REFERENCES members(id),
+    expected_on  DATE,                          -- NULL = unknown
+    status       TEXT NOT NULL DEFAULT 'expected',  -- expected | arrived | picked_up | cancelled
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_orders_expected ON orders (expected_on);
+CREATE INDEX idx_packages_open ON packages (status) WHERE status IN ('expected', 'arrived');
 
--- Reminders / nudges (future)
+-- Reminders / nudges (wired up in Phase 7).
 CREATE TABLE reminders (
     id          BIGSERIAL PRIMARY KEY,
-    member_id   INTEGER REFERENCES family_members(id),
+    member_id   INTEGER REFERENCES members(id),
     text        TEXT NOT NULL,
     due_at      TIMESTAMPTZ NOT NULL,
     recurring   TEXT,                           -- cron-ish, or NULL for one-shot

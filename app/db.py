@@ -22,71 +22,67 @@ async def close_pool() -> None:
         await _pool.close()
 
 
+# --- members -------------------------------------------------------------------
+
 async def get_member_by_telegram_id(tg_id: int):
     async with _pool.acquire() as con:
-        return await con.fetchrow(
-            "SELECT * FROM family_members WHERE telegram_id = $1", tg_id
-        )
+        return await con.fetchrow("SELECT * FROM members WHERE telegram_id = $1", tg_id)
 
 
 async def roster_string() -> str:
+    """Everyone in the suite, for the prompt: 'Sam (Sam Example, سام), ...'."""
     async with _pool.acquire() as con:
-        rows = await con.fetch("SELECT name, role FROM family_members ORDER BY id")
-    return ", ".join(f"{r['name']} ({r['role']})" for r in rows) or "the family"
+        rows = await con.fetch("SELECT name, full_name, arabic_name FROM members ORDER BY id")
+    parts = []
+    for r in rows:
+        extra = ", ".join(x for x in (r["full_name"], r["arabic_name"]) if x)
+        parts.append(f"{r['name']} ({extra})" if extra else r["name"])
+    return ", ".join(parts) or "the suite"
 
 
 async def get_member_id_by_name(name: str):
-    """Resolve a spoken name to a member id (case-insensitive), or None."""
+    """Resolve a spoken name to a member id, or None. Matches the everyday name, the
+    Arabic name, the full name, or just a first/last name from the full name
+    ("Samuel" or "Example" -> the member everyone calls Sam). Case-insensitive."""
+    name = (name or "").strip()
+    if not name:
+        return None
     async with _pool.acquire() as con:
         row = await con.fetchrow(
-            "SELECT id FROM family_members WHERE name ILIKE $1 ORDER BY id LIMIT 1", name
+            "SELECT id FROM members "
+            "WHERE name ILIKE $1 OR arabic_name = $1 OR full_name ILIKE $1 "
+            "   OR full_name ILIKE ($1 || ' %') OR full_name ILIKE ('% ' || $1) "
+            "ORDER BY (name ILIKE $1) DESC, id LIMIT 1",
+            name,
         )
     return row["id"] if row else None
 
 
-async def log_message(member_id, chat_id, role, content) -> None:
+# --- conversation log ----------------------------------------------------------
+
+async def log_message(*, thread: str, channel: str, role: str, member_id, content: str,
+                      modality: str = "text", speaker_confidence: float | None = None) -> None:
     async with _pool.acquire() as con:
         await con.execute(
-            "INSERT INTO messages (member_id, chat_id, role, content) "
-            "VALUES ($1, $2, $3, $4)",
-            member_id, chat_id, role, content,
+            "INSERT INTO messages (thread, channel, role, member_id, content, modality, "
+            "speaker_confidence) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            thread, channel, role, member_id, content, modality, speaker_confidence,
         )
 
 
-async def recent_messages(chat_id, limit: int = 10):
+async def recent_messages(thread: str, limit: int = 10):
+    """The last `limit` turns of a thread, oldest first, with the speaker's name."""
     async with _pool.acquire() as con:
         rows = await con.fetch(
-            "SELECT role, content FROM messages WHERE chat_id = $1 "
-            "ORDER BY created_at DESC LIMIT $2",
-            chat_id, limit,
+            "SELECT m.role, m.content, mem.name AS speaker "
+            "FROM messages m LEFT JOIN members mem ON mem.id = m.member_id "
+            "WHERE m.thread = $1 ORDER BY m.created_at DESC, m.id DESC LIMIT $2",
+            thread, limit,
         )
     return list(reversed(rows))  # back to chronological order
 
 
-# --- dog tool backing queries ---
-
-async def dogs_fed_today():
-    async with _pool.acquire() as con:
-        return await con.fetchrow(
-            "SELECT f.fed_on, f.created_at, m.name AS fed_by_name "
-            "FROM dog_feedings f "
-            "LEFT JOIN family_members m ON m.id = f.fed_by "
-            "WHERE f.fed_on = (now() AT TIME ZONE 'Africa/Cairo')::date"
-        )
-
-
-async def mark_dogs_fed(member_id: int) -> bool:
-    """Idempotent for the day. Returns True if this was a fresh feeding."""
-    async with _pool.acquire() as con:
-        result = await con.execute(
-            "INSERT INTO dog_feedings (fed_by) VALUES ($1) "
-            "ON CONFLICT (fed_on) DO NOTHING",
-            member_id,
-        )
-    return result.endswith("1")   # "INSERT 0 1" => newly inserted
-
-
-# --- household knowledge base (Phase 2) ---
+# --- household knowledge base --------------------------------------------------
 
 async def add_fact(category, content, embedding, created_by) -> None:
     async with _pool.acquire() as con:
@@ -121,7 +117,7 @@ async def update_fact(fact_id, category, content, embedding) -> None:
 
 
 async def search_facts(embedding, k: int = 4):
-    # Family-wide: NO member_id/category scope — any member can recall any household
+    # Suite-wide: NO member_id/category scope — anyone can recall any household
     # fact. Only skip rows with no embedding so a legacy NULL row can't crowd out a
     # real match (those get backfilled via scripts/backfill_embeddings.py). No distance
     # cutoff — return top-k and let the model judge relevance. id is selected so the
@@ -135,7 +131,7 @@ async def search_facts(embedding, k: int = 4):
         )
 
 
-# --- live location (Phase 3) ---
+# --- live location -------------------------------------------------------------
 
 async def upsert_location(member_id, lat, lng) -> None:
     async with _pool.acquire() as con:
@@ -151,7 +147,7 @@ async def get_location(name):
     async with _pool.acquire() as con:
         return await con.fetchrow(
             "SELECT m.name, l.lat, l.lng, l.updated_at "
-            "FROM member_locations l JOIN family_members m ON m.id = l.member_id "
+            "FROM member_locations l JOIN members m ON m.id = l.member_id "
             "WHERE m.name ILIKE $1", name,
         )
 
@@ -160,11 +156,11 @@ async def get_all_locations():
     async with _pool.acquire() as con:
         return await con.fetch(
             "SELECT m.name, l.lat, l.lng, l.updated_at "
-            "FROM member_locations l JOIN family_members m ON m.id = l.member_id"
+            "FROM member_locations l JOIN members m ON m.id = l.member_id"
         )
 
 
-# --- shared shopping list ---
+# --- shared shopping list ------------------------------------------------------
 
 async def add_shopping_item(item, qty, member_id) -> bool:
     """Add to the shared list. Returns False if an open entry already exists
@@ -209,38 +205,41 @@ async def clear_shopping_list(member_id) -> int:
     return int(result.split()[-1])   # "UPDATE 3" -> 3
 
 
-# --- incoming orders / deliveries (Fix 1) ---
+# --- packages / deliveries -----------------------------------------------------
 
-async def add_order(description, expected_on, ordered_by, paid, tip_note):
-    """Record an incoming order. `expected_on` is a resolved date, `ordered_by` a
-    member id (or None). Returns the new order id."""
+async def add_package(description, carrier, owner_id, expected_on) -> int:
+    """Record an incoming package. `expected_on` is a resolved date or None.
+    Returns the new package id."""
     async with _pool.acquire() as con:
         row = await con.fetchrow(
-            "INSERT INTO orders (description, expected_on, ordered_by, paid, tip_note) "
-            "VALUES ($1, $2, $3, $4, $5) RETURNING id",
-            description, expected_on, ordered_by, paid, tip_note,
+            "INSERT INTO packages (description, carrier, owner_id, expected_on) "
+            "VALUES ($1, $2, $3, $4) RETURNING id",
+            description, carrier, owner_id, expected_on,
         )
     return row["id"]
 
 
-async def get_orders(expected_on):
-    """Pending orders expected on a given date, with the orderer's name joined in."""
+async def get_open_packages(owner_id=None):
+    """Packages not yet picked up (expected or arrived), optionally for one member."""
     async with _pool.acquire() as con:
         return await con.fetch(
-            "SELECT o.id, o.description, o.paid, o.tip_note, m.name AS ordered_by_name "
-            "FROM orders o LEFT JOIN family_members m ON m.id = o.ordered_by "
-            "WHERE o.status = 'pending' AND o.expected_on = $1 "
-            "ORDER BY o.created_at",
-            expected_on,
+            "SELECT p.id, p.description, p.carrier, p.expected_on, p.status, "
+            "       m.name AS owner_name "
+            "FROM packages p LEFT JOIN members m ON m.id = p.owner_id "
+            "WHERE p.status IN ('expected', 'arrived') "
+            "  AND ($1::int IS NULL OR p.owner_id = $1) "
+            "ORDER BY p.expected_on NULLS LAST, p.created_at",
+            owner_id,
         )
 
 
-async def mark_order_arrived(order_id) -> bool:
-    """Flip a pending order to 'arrived'. Returns False if no such pending order."""
+async def update_package_status(package_id, status):
+    """Move an open package to a new status. Returns its description, or None if
+    there's no open package with that id (never pretend a change happened)."""
     async with _pool.acquire() as con:
         row = await con.fetchrow(
-            "UPDATE orders SET status = 'arrived' "
-            "WHERE id = $1 AND status = 'pending' RETURNING id",
-            order_id,
+            "UPDATE packages SET status = $2, updated_at = now() "
+            "WHERE id = $1 AND status IN ('expected', 'arrived') RETURNING description",
+            package_id, status,
         )
-    return row is not None
+    return row["description"] if row else None

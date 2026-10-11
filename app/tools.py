@@ -16,12 +16,15 @@ FACT_DEDUP_DISTANCE = 0.15
 
 def _format_event(e: dict) -> str:
     """Render an event with its weekday resolved in CODE, never by the model — the
-    'cairo on Friday' drift came from the model guessing weekdays. Start may be an
-    all-day date ('2026-06-19') or a timed dateTime."""
+    model guessing weekdays once put an event on the wrong day. Start may be an
+    all-day date ('2026-06-19') or a timed dateTime; an offset-aware time is shown
+    in local time (so a UTC-stamped event can't land on the wrong day or hour)."""
     start = e["start"]
     has_time = "T" in start
     try:
         dt = datetime.fromisoformat(start)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(ZoneInfo(settings.timezone))
     except ValueError:
         d = date.fromisoformat(start[:10])
         dt = datetime(d.year, d.month, d.day)
@@ -52,10 +55,10 @@ def _human_age(mins: float) -> str:
 def _describe_location(name, lat, lng, ts) -> str:
     """One self-describing clause per member, with the tense baked in.
 
-    asyncpg returns TIMESTAMPTZ as UTC-aware datetimes; display must be Cairo
+    asyncpg returns TIMESTAMPTZ as UTC-aware datetimes; display must be local time
     (CLAUDE.md gotcha). We decide fresh-vs-stale here so the model never narrates
     an hours-old reading as where someone is *now* — it just relays our wording.
-    Naive inputs (tests) are treated as Cairo-local.
+    Naive inputs (tests) are treated as local.
     """
     place = geo.describe(lat, lng)            # "home" or "3.2 km from home"
     tz = ZoneInfo(settings.timezone)
@@ -73,27 +76,11 @@ def _describe_location(name, lat, lng, ts) -> str:
 
 TOOLS = [
     {
-        "name": "get_dog_status",
-        "description": (
-            "Check whether the household dogs have been fed their meal today. "
-            "Use whenever someone asks if the dogs are fed."
-        ),
-        "input_schema": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "name": "mark_dogs_fed",
-        "description": (
-            "Record that the dogs have been fed today. "
-            "Use when someone says they (or someone) fed the dogs."
-        ),
-        "input_schema": {"type": "object", "properties": {}, "required": []},
-    },
-    {
         "name": "remember_fact",
         "description": (
             "Store a piece of household knowledge for later recall — a contact number, "
             "the wifi password, where something is kept, a recurring bill, an appliance or "
-            "service detail. Use whenever someone tells you a fact about the house to keep."
+            "service detail. Use whenever someone tells you a fact about the suite to keep."
         ),
         "input_schema": {
             "type": "object",
@@ -109,7 +96,7 @@ TOOLS = [
     {
         "name": "recall_facts",
         "description": (
-            "Search stored household knowledge to answer a question about the house "
+            "Search stored household knowledge to answer a question about the suite "
             "(where something is, a number, a password, a bill). Use this before saying you don't know."
         ),
         "input_schema": {
@@ -121,7 +108,7 @@ TOOLS = [
     {
         "name": "get_calendar",
         "description": (
-            "Look up upcoming family events from the shared calendar. Use for questions like "
+            "Look up upcoming events on the suite's shared calendar. Use for questions like "
             "what's on this week, what are we doing Friday, any plans tomorrow."
         ),
         "input_schema": {
@@ -133,7 +120,7 @@ TOOLS = [
     {
         "name": "create_event",
         "description": (
-            "Add a new event to the shared family calendar. Only call this AFTER the person "
+            "Add a new event to the suite's shared calendar. Only call this AFTER the person "
             "has confirmed the details you read back to them. Pass the day the person SAID "
             "(or an exact date from the date reference) and the time separately — never a "
             "date you worked out yourself; Abdo's code turns the day into the real date."
@@ -148,7 +135,7 @@ TOOLS = [
                                         "exact date copied from the date reference (YYYY-MM-DD). NEVER "
                                         "compute or guess a date yourself.")},
                 "time": {"type": "string",
-                         "description": "Start time, 24-hour Cairo local, HH:MM, e.g. '19:00'."},
+                         "description": "Start time, 24-hour local time, HH:MM, e.g. '19:00'."},
                 "end_time": {"type": "string",
                              "description": "Optional end time, HH:MM. Defaults to one hour after start."},
             },
@@ -183,7 +170,7 @@ TOOLS = [
     {
         "name": "delete_event",
         "description": (
-            "Delete an event from the shared family calendar. Get the event's id from "
+            "Delete an event from the suite's shared calendar. Get the event's id from "
             "get_calendar first. Only call AFTER the person confirms the deletion."
         ),
         "input_schema": {
@@ -197,19 +184,19 @@ TOOLS = [
     {
         "name": "where_is",
         "description": (
-            "Find where a family member currently is, from their shared live location. "
+            "Find where a roommate currently is, from their shared live location. "
             "Use for who's home, where is X, is X on the way. Pass 'everyone' for all."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"name": {"type": "string", "description": "A family member's name, or 'everyone'."}},
+            "properties": {"name": {"type": "string", "description": "A roommate's name, or 'everyone'."}},
             "required": ["name"],
         },
     },
     {
         "name": "add_to_shopping_list",
         "description": (
-            "Add an item to the shared household shopping list. Use when someone says "
+            "Add an item to the suite's shared shopping list. Use when someone says "
             "to buy/get something or to put it on the list (e.g. 'add milk', 'we need bread'). "
             "Add one item per call; call it multiple times for several items."
         ),
@@ -217,7 +204,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "item": {"type": "string", "description": "The thing to buy, e.g. 'milk', 'bread'."},
-                "qty": {"type": "string", "description": "Optional amount, free text, e.g. '2 kilo', 'a dozen'."},
+                "qty": {"type": "string", "description": "Optional amount, free text, e.g. '2 bags', 'a dozen'."},
             },
             "required": ["item"],
         },
@@ -251,44 +238,51 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
-        "name": "add_order",
+        "name": "add_package",
         "description": (
-            "Record an incoming online order/delivery so anyone home knows what's coming. "
-            "Use when someone says a package or order is arriving."
+            "Record an incoming package/delivery for someone in the suite, so everyone knows "
+            "what's coming and whose it is. Use when someone says a package or order is on its way."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "description": {"type": "string", "description": "What the order is."},
+                "description": {"type": "string", "description": "What it is, e.g. 'desk lamp'."},
+                "owner": {"type": "string",
+                          "description": "Whose package it is (a roommate's name). Omit if it's the speaker's own."},
+                "carrier": {"type": "string", "description": "Carrier or store if mentioned, e.g. 'Amazon', 'Canada Post'."},
                 "day": {"type": "string",
-                        "description": ("When it's expected: a weekday, 'today'/'tomorrow', or an "
-                                        "exact date. Pass it as said; resolved server-side.")},
-                "ordered_by": {"type": "string", "description": "Name of who placed it, if known."},
-                "paid": {"type": "boolean", "description": "true if prepaid, false if cash on delivery."},
-                "tip_note": {"type": "string", "description": "Tip set aside, e.g. '50 EGP', if mentioned."},
+                        "description": ("When it's expected, exactly as said: a weekday, 'today'/'tomorrow', "
+                                        "or an exact date from the date reference. Omit if unknown. "
+                                        "Resolved in code — never compute a date yourself.")},
             },
-            "required": ["description", "day", "paid"],
+            "required": ["description"],
         },
     },
     {
-        "name": "get_orders",
+        "name": "get_packages",
         "description": (
-            "List pending orders/deliveries expected on a day (default today). Use when someone "
-            "asks if any orders are coming — e.g. the doorbell rang."
+            "List the suite's open packages (still expected, or arrived but not picked up), with "
+            "whose each is and its id. Use when someone asks about packages or deliveries."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"day": {"type": "string", "description": "Which day; defaults to today."}},
+            "properties": {"owner": {"type": "string", "description": "Only this roommate's packages (optional)."}},
             "required": [],
         },
     },
     {
-        "name": "mark_order_arrived",
-        "description": "Mark an order as arrived once it's been received.",
+        "name": "update_package",
+        "description": (
+            "Change an open package's status: 'arrived' (it's at the building), 'picked_up' (someone "
+            "has it), or 'cancelled'. Use the package id from get_packages — never a guessed one."
+        ),
         "input_schema": {
             "type": "object",
-            "properties": {"order_id": {"type": "integer"}},
-            "required": ["order_id"],
+            "properties": {
+                "package_id": {"type": "integer"},
+                "status": {"type": "string", "enum": ["arrived", "picked_up", "cancelled"]},
+            },
+            "required": ["package_id", "status"],
         },
     },
 ]
@@ -306,18 +300,20 @@ async def _read_calendar(days_ahead: int):
         return await asyncio.to_thread(calendar_svc.get_events, days_ahead)
 
 
-async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
-    if name == "get_dog_status":
-        row = await db.dogs_fed_today()
-        if row:
-            who = row["fed_by_name"] or "someone"
-            return f"FED today (by {who})."
-        return "NOT fed yet today."
+def _package_line(r) -> str:
+    who = r["owner_name"] or "someone"
+    what = r["description"] + (f" ({r['carrier']})" if r["carrier"] else "")
+    if r["status"] == "arrived":
+        state = "ARRIVED, waiting to be picked up"
+    elif r["expected_on"]:
+        state = f"expected {r['expected_on'].strftime('%A %d %B')}"
+    else:
+        state = "expected (no date given)"
+    return f"- #{r['id']} {what} for {who}: {state}"
 
-    if name == "mark_dogs_fed":
-        fresh = await db.mark_dogs_fed(member_id)
-        return "Recorded: dogs fed today." if fresh else "Already marked fed today."
 
+async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
+    """Run one client-side tool. member_id is the speaker (None if unidentified)."""
     if name == "remember_fact":
         content, category = tool_input["content"], tool_input["category"]
         vec = await embeddings.embed(content, input_type="search_document")
@@ -452,45 +448,46 @@ async def run_tool(name: str, tool_input: dict, member_id: int) -> str:
         n = await db.clear_shopping_list(member_id)
         return f"Cleared {n} item(s) from the shopping list." if n else "The list was already empty."
 
-    if name == "add_order":
-        try:
-            expected_on = calendar_svc.resolve_date(tool_input["day"])
-        except ValueError:
-            return (f"ERROR: couldn't understand the day '{tool_input['day']}'. Ask the user "
-                    f"which day (a weekday, today/tomorrow, or a date); do NOT guess one.")
-        ordered_by = None
-        if tool_input.get("ordered_by"):
-            ordered_by = await db.get_member_id_by_name(tool_input["ordered_by"])
-        oid = await db.add_order(
-            tool_input["description"], expected_on, ordered_by,
-            tool_input["paid"], tool_input.get("tip_note"),
-        )
-        pay = "prepaid" if tool_input["paid"] else "cash on delivery"
-        return (f"Recorded order #{oid}: {tool_input['description']} expected "
-                f"{expected_on.strftime('%A %d %B')} ({pay}).")
+    if name == "add_package":
+        expected_on = None
+        if tool_input.get("day"):
+            try:
+                expected_on = calendar_svc.resolve_date(tool_input["day"])
+            except ValueError:
+                return (f"ERROR: couldn't understand the day '{tool_input['day']}'. Ask the user "
+                        f"which day (a weekday, today/tomorrow, or a date); do NOT guess one.")
+        owner_id, owner_label = member_id, "the speaker"
+        if tool_input.get("owner"):
+            owner_id = await db.get_member_id_by_name(tool_input["owner"])
+            if owner_id is None:
+                return (f"ERROR: nobody in the suite is called '{tool_input['owner']}'. Ask whose "
+                        f"package it is; do NOT record it under a guessed name.")
+            owner_label = tool_input["owner"]
+        pid = await db.add_package(tool_input["description"], tool_input.get("carrier"),
+                                   owner_id, expected_on)
+        when = f"expected {expected_on.strftime('%A %d %B')}" if expected_on else "no expected date"
+        return f"Recorded package #{pid}: {tool_input['description']} for {owner_label}, {when}."
 
-    if name == "get_orders":
-        day = tool_input.get("day") or "today"
-        try:
-            expected_on = calendar_svc.resolve_date(day)
-        except ValueError:
-            return (f"ERROR: couldn't understand the day '{day}'. Ask which day; do NOT guess.")
-        rows = await db.get_orders(expected_on)
+    if name == "get_packages":
+        owner_id = None
+        if tool_input.get("owner"):
+            owner_id = await db.get_member_id_by_name(tool_input["owner"])
+            if owner_id is None:
+                return f"ERROR: nobody in the suite is called '{tool_input['owner']}'."
+        rows = await db.get_open_packages(owner_id)
         if not rows:
-            return f"No pending orders expected {expected_on.strftime('%A %d %B')}."
-        lines = []
-        for r in rows:
-            who = r["ordered_by_name"] or "someone"
-            pay = "prepaid" if r["paid"] else "cash on delivery"
-            tip = f", tip ready: {r['tip_note']}" if r["tip_note"] else ""
-            lines.append(f"- #{r['id']} {r['description']} (ordered by {who}) — {pay}{tip}")
-        return "\n".join(lines)
+            return "No open packages." if owner_id is None else \
+                f"No open packages for {tool_input['owner']}."
+        return "\n".join(_package_line(r) for r in rows)
 
-    if name == "mark_order_arrived":
-        ok = await db.mark_order_arrived(tool_input["order_id"])
-        if ok:
-            return f"Marked order #{tool_input['order_id']} as arrived."
-        return (f"No pending order #{tool_input['order_id']} found. Do NOT claim it arrived; "
-                f"call get_orders to see the real ids.")
+    if name == "update_package":
+        status = tool_input["status"]
+        if status not in ("arrived", "picked_up", "cancelled"):
+            return f"ERROR: unknown status '{status}'. Use arrived, picked_up, or cancelled."
+        desc = await db.update_package_status(tool_input["package_id"], status)
+        if desc is None:
+            return (f"ERROR: no open package #{tool_input['package_id']}. Do NOT claim it "
+                    f"changed; call get_packages to see the real ids.")
+        return f"Package #{tool_input['package_id']} ({desc}) is now {status.replace('_', ' ')}."
 
     return f"Unknown tool: {name}"

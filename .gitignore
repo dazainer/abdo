@@ -12,3 +12,6 @@ serious-hall-*.json
 
 # Private household details (names, ids, coordinates, draft env). Never commit.
 local/
+
+# Real member seed (names, Telegram ids). Committed template: seed.example.sql
+seed.sql

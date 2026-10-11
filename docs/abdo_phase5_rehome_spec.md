@@ -286,14 +286,14 @@ Live checks after deploy (Telegram, all four roommates):
 ## 10. Build checklist
 
 - [ ] Prereqs §0 done (backup verified first)
-- [ ] `requirements.txt` pinned; SDK supports Haiku 5.5 + `output_config`
-- [ ] New `schema.sql` + `seed.sql`
-- [ ] `turn.py`, `channels/telegram.py`, thin `main.py`
-- [ ] `brain.py`: Haiku 5.5, effort, max_tokens, refusal, cache-usage logging
-- [ ] `prompts.py`: static/dynamic split + suite persona (no names in the static block)
-- [ ] Public-repo hygiene §8b: fake examples, gitignored seed, README
-- [ ] Tools: dogs out, packages in, timezone wording
-- [ ] Smoke tests green
+- [x] `requirements.txt` pinned; SDK supports Haiku 5.5 + `output_config` (0.109.1, no upgrade needed)
+- [x] New `schema.sql` + `seed.example.sql` (real `seed.sql` gitignored)
+- [x] `turn.py`, `channels/telegram.py`, thin `main.py`
+- [x] `brain.py`: Haiku 5.5, effort, max_tokens, refusal, cache-usage logging
+- [x] `prompts.py`: static/dynamic split + suite persona (no names in the static block)
+- [x] Public-repo hygiene §8b: fake examples, gitignored seed, README
+- [x] Tools: dogs out, packages in, timezone wording
+- [x] Smoke tests green (169 checks; `count_tokens` confirms the model id, cached prefix ≈ 10.2K tokens)
 - [ ] Railway: new Postgres, env vars, schema + seed, webhook set, old webhook deleted
 - [ ] Live checks §9
 - [ ] CLAUDE.md: mark Phase 5 done, Phase 6 current

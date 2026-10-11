@@ -1,8 +1,9 @@
 from math import radians, sin, cos, asin, sqrt
 from app.config import settings
 
-# Geofence radius around home (km). New Cairo plots are large — tune to your compound.
-HOME_RADIUS_KM = 0.15
+# Geofence radius around home (km). A residence complex spans several buildings —
+# tune to the footprint so "home" means anywhere on the property.
+HOME_RADIUS_KM = 0.2
 
 
 def km_from_home(lat: float, lng: float) -> float:

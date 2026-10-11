@@ -1,10 +1,15 @@
-"""Offline smoke test for Abdo Phase 1.
+"""Offline smoke test for Abdo.
 
-Exercises the real brain tool-loop, tool dispatch, DB result parsing, and
-update parsing — with the network (Anthropic, Telegram) and Postgres faked out.
-No real credentials, DB, or HTTP calls. Run:  python tests/smoke.py
+Exercises the real turn entry point, brain tool-loop, tool dispatch, prompt
+structure, Telegram channel routing, and update parsing — with the network
+(Anthropic, Telegram, Cohere, Google, ElevenLabs) and Postgres faked out.
+No real credentials, DB, or HTTP calls. Run:  .venv/bin/python tests/smoke.py
+
+Test data is deliberately fake (the repo is public): no real passwords, full
+names, ids, or coordinates.
 """
 import asyncio
+import hashlib
 import os
 import sys
 from types import SimpleNamespace
@@ -15,37 +20,48 @@ os.environ.setdefault("COHERE_API_KEY", "co-fake")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123:fake")
 os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET", "test-secret")
 os.environ.setdefault("DATABASE_URL", "postgresql://fake/fake")
+os.environ["TIMEZONE"] = "America/Toronto"
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import brain, db, tools, telegram, embeddings  # noqa: E402
+from app import brain, db, tools, telegram, embeddings, turn, prompts  # noqa: E402
+
+ZAIN = {"id": 1, "name": "Zain"}
+MO = {"id": 2, "name": "Mo"}
+NAMES = {1: "Zain", 2: "Mo"}
 
 
-# --- In-memory fake of the dog-feeding state, replacing the db layer ---------
+# --- In-memory fake of the db layer ------------------------------------------
 class FakeDB:
     def __init__(self):
-        self.fed_today = None        # None => not fed; dict => fed row
-        self.logged = []             # (member_id, chat_id, role, content)
-        self.facts = []              # stored household facts
+        self.logged = []             # every log_message row (dicts)
+        self.facts = []
+        self.shopping = []
+        self.packages = []
+        self.locations = {}          # member_id -> (lat, lng), written by upsert
+        self.loc_rows = {}           # name.lower() -> asyncpg-style row dict, for reads
+        self.members_by_tg = {111: ZAIN, 222: MO}
 
-    async def recent_messages(self, chat_id, limit=10):
-        return []                    # fresh conversation
+    # members
+    async def get_member_by_telegram_id(self, tg_id):
+        return self.members_by_tg.get(tg_id)
 
     async def roster_string(self):
-        return "Zain (member)"
+        return "Zain (زين), Mo (مو)"
 
-    async def dogs_fed_today(self):
-        return self.fed_today
+    async def get_member_id_by_name(self, name):
+        return {"zain": 1, "mo": 2}.get((name or "").lower())
 
-    async def mark_dogs_fed(self, member_id):
-        if self.fed_today is None:
-            self.fed_today = {"fed_by_name": "Zain"}
-            return True              # fresh insert
-        return False                 # already fed (idempotent)
+    # conversation log
+    async def log_message(self, **row):
+        self.logged.append(row)
 
-    async def log_message(self, member_id, chat_id, role, content):
-        self.logged.append((member_id, chat_id, role, content))
+    async def recent_messages(self, thread, limit=10):
+        rows = [r for r in self.logged if r["thread"] == thread][-limit:]
+        return [{"role": r["role"], "content": r["content"],
+                 "speaker": NAMES.get(r["member_id"])} for r in rows]
 
+    # facts
     async def add_fact(self, category, content, embedding, created_by):
         self._fact_seq = getattr(self, "_fact_seq", 0) + 1
         self.facts.append({"id": self._fact_seq, "category": category,
@@ -68,45 +84,21 @@ class FakeDB:
                 f.update(category=category, content=content, embedding=embedding)
 
     async def search_facts(self, embedding, k=4):
-        # Embedding is faked, so just return what's stored (most-recent first).
-        # Mirror the real row shape: id + category + content + distance (the recall
-        # path logs the top row's id and distance).
+        # Mirror the real row shape: id + category + content + distance.
         return [{"id": f["id"], "category": f["category"], "content": f["content"],
                  "distance": 0.0} for f in reversed(self.facts)][:k]
 
-    async def get_member_id_by_name(self, name):
-        return {"zain": 1, "omar": 2}.get(name.lower())
-
-    async def add_order(self, description, expected_on, ordered_by, paid, tip_note):
-        self._order_seq = getattr(self, "_order_seq", 0) + 1
-        self.orders.append({"id": self._order_seq, "description": description,
-                            "expected_on": expected_on, "ordered_by": ordered_by,
-                            "paid": paid, "tip_note": tip_note, "status": "pending"})
-        return self._order_seq
-
-    async def get_orders(self, expected_on):
-        names = {1: "Zain", 2: "Omar"}
-        return [{"id": o["id"], "description": o["description"], "paid": o["paid"],
-                 "tip_note": o["tip_note"], "ordered_by_name": names.get(o["ordered_by"])}
-                for o in self.orders
-                if o["status"] == "pending" and o["expected_on"] == expected_on]
-
-    async def mark_order_arrived(self, order_id):
-        for o in self.orders:
-            if o["id"] == order_id and o["status"] == "pending":
-                o["status"] = "arrived"
-                return True
-        return False
-
+    # location
     async def upsert_location(self, member_id, lat, lng):
         self.locations[member_id] = (lat, lng)
 
     async def get_location(self, name):
-        return self._loc_rows.get(name.lower())
+        return self.loc_rows.get(name.lower())
 
     async def get_all_locations(self):
-        return list(self._loc_rows.values())
+        return list(self.loc_rows.values())
 
+    # shopping
     async def add_shopping_item(self, item, qty, member_id):
         if any(s["item"].lower() == item.lower() and not s["bought"] for s in self.shopping):
             return False
@@ -129,19 +121,35 @@ class FakeDB:
             s["bought"] = True
         return n
 
+    # packages
+    async def add_package(self, description, carrier, owner_id, expected_on):
+        self._pkg_seq = getattr(self, "_pkg_seq", 0) + 1
+        self.packages.append({"id": self._pkg_seq, "description": description,
+                              "carrier": carrier, "owner_id": owner_id,
+                              "expected_on": expected_on, "status": "expected"})
+        return self._pkg_seq
+
+    async def get_open_packages(self, owner_id=None):
+        return [{**p, "owner_name": NAMES.get(p["owner_id"])} for p in self.packages
+                if p["status"] in ("expected", "arrived")
+                and (owner_id is None or p["owner_id"] == owner_id)]
+
+    async def update_package_status(self, package_id, status):
+        for p in self.packages:
+            if p["id"] == package_id and p["status"] in ("expected", "arrived"):
+                p["status"] = status
+                return p["description"]
+        return None
+
 
 fake = FakeDB()
-fake.shopping = []       # list of {item, qty, bought}
-fake.locations = {}      # member_id -> (lat, lng), written by upsert
-fake._loc_rows = {}      # name.lower() -> asyncpg-style row dict, for reads
-fake.orders = []         # list of order dicts
-for name in ("recent_messages", "roster_string", "dogs_fed_today",
-             "mark_dogs_fed", "log_message", "add_fact", "nearest_fact",
-             "update_fact", "search_facts", "upsert_location", "get_location",
-             "get_all_locations", "add_shopping_item", "get_shopping_list",
-             "mark_item_bought", "clear_shopping_list", "get_member_id_by_name",
-             "add_order", "get_orders", "mark_order_arrived"):
-    setattr(db, name, getattr(fake, name))
+for _name in ("get_member_by_telegram_id", "roster_string", "get_member_id_by_name",
+              "log_message", "recent_messages", "add_fact", "nearest_fact", "update_fact",
+              "search_facts", "upsert_location", "get_location", "get_all_locations",
+              "add_shopping_item", "get_shopping_list", "mark_item_bought",
+              "clear_shopping_list", "add_package", "get_open_packages",
+              "update_package_status"):
+    setattr(db, _name, getattr(fake, _name))
 
 
 # --- Fake embeddings: record input_type so we can assert store/recall asymmetry --
@@ -152,7 +160,6 @@ async def fake_embed(text, *, input_type):
     embed_calls.append(input_type)
     # Deterministic per text and non-zero, so embeddings.is_valid() passes and
     # identical content produces an identical vector (lets the dedup path fire).
-    import hashlib
     h = hashlib.sha256(text.encode("utf-8")).digest()
     return [(h[i % len(h)] / 255.0) + 0.001 for i in range(embeddings.EMBED_DIM)]
 
@@ -160,24 +167,25 @@ async def fake_embed(text, *, input_type):
 embeddings.embed = fake_embed
 
 
-# --- Fake calendar + a real home coordinate for the geofence ------------------
-from datetime import datetime, timedelta, timezone  # noqa: E402
+# --- Fake calendar + a fake home coordinate for the geofence ------------------
+from datetime import datetime, timedelta, timezone, date  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
-from app import calendar_svc, geo  # noqa: E402
+from app import calendar_svc  # noqa: E402
 from app.config import settings  # noqa: E402
 
-settings.home_lat = 30.0000      # New Cairo-ish; lets geo.describe compute distance
-settings.home_lng = 31.0000
+settings.home_lat = 43.0000      # fake pin; lets geo.describe compute distance
+settings.home_lng = -80.0000
+TZ = ZoneInfo(settings.timezone)
 
 _fake_events = []
 _created_events = []
+_deleted_events = []
 calendar_svc.is_configured = lambda: True
 calendar_svc.get_events = lambda days_ahead=7: list(_fake_events)
 
 
 def fake_create_event(summary, day, time, end_time=None):
-    # Mirror the real signature: day+time, code resolves the date. The fake echoes
-    # the resolved start so the tool's confirmation string can be asserted.
+    # Mirror the real signature: day+time, code resolves the date.
     d = calendar_svc.resolve_date(day)
     start = calendar_svc._compose(d, time)
     ev = {"id": "evt_new", "summary": summary, "start": start}
@@ -186,11 +194,8 @@ def fake_create_event(summary, day, time, end_time=None):
 
 
 def fake_update_event(event_id, summary=None, day=None, time=None, end_time=None):
-    return {"id": event_id, "summary": summary or "Family Gathering",
-            "start": "2026-06-17T19:00:00", "end": "2026-06-17T20:00:00"}
-
-
-_deleted_events = []
+    return {"id": event_id, "summary": summary or "Suite dinner",
+            "start": "2026-10-16T19:00:00", "end": "2026-10-16T20:00:00"}
 
 
 def fake_delete_event(event_id):
@@ -202,29 +207,40 @@ calendar_svc.update_event = fake_update_event
 calendar_svc.delete_event = fake_delete_event
 
 
-# --- Scripted Anthropic client: simulate one tool_use turn, then final text --
-def _tool_use_block(tool_name, tool_id):
-    return SimpleNamespace(type="tool_use", name=tool_name, input={}, id=tool_id)
+# --- Scripted Anthropic client ------------------------------------------------
+def _tool_use_block(tool_name, tool_id, tool_input=None):
+    return SimpleNamespace(type="tool_use", name=tool_name, input=tool_input or {}, id=tool_id)
 
 
 def _text_block(text):
     return SimpleNamespace(type="text", text=text)
 
 
+def _thinking_block():
+    # Haiku 5.5 returns thinking blocks with empty text by default (display omitted).
+    return SimpleNamespace(type="thinking", thinking="", signature="sig")
+
+
+def _resp(stop_reason, content, **extra):
+    return SimpleNamespace(stop_reason=stop_reason, content=content, **extra)
+
+
 class FakeMessages:
     def __init__(self, script):
         self._script = script        # list of responses to return in order
         self._i = 0
-        self.calls = []               # records (model, messages) per call
+        self.requests = []           # full kwargs of every create() call
 
-    async def create(self, *, model, max_tokens, system, tools, messages):
-        self.calls.append((model, [m["role"] for m in messages]))
-        self.systems = getattr(self, "systems", [])
-        self.systems.append(system)
-        self.last_tools = tools           # the toolset offered to the model this call
+    async def create(self, **kw):
+        # Snapshot the message list: the brain keeps appending to the same list.
+        self.requests.append({**kw, "messages": list(kw["messages"])})
         resp = self._script[self._i]
         self._i += 1
         return resp
+
+    @property
+    def calls(self):
+        return [(r["model"], [m["role"] for m in r["messages"]]) for r in self.requests]
 
 
 class FakeClient:
@@ -232,17 +248,20 @@ class FakeClient:
         self.messages = FakeMessages(script)
 
 
-def script_for(tool_name, final_text):
+def script_for(tool_name, final_text, tool_input=None):
     """First call asks for the tool; second call (after result) returns text."""
     return [
-        SimpleNamespace(stop_reason="tool_use",
-                        content=[_tool_use_block(tool_name, "toolu_1")]),
-        SimpleNamespace(stop_reason="end_turn",
-                        content=[_text_block(final_text)]),
+        _resp("tool_use", [_tool_use_block(tool_name, "toolu_1", tool_input)]),
+        _resp("end_turn", [_text_block(final_text)]),
     ]
 
 
-MEMBER = {"id": 1, "name": "Zain", "role": "member"}
+def reply_only(text):
+    return [_resp("end_turn", [_text_block(text)])]
+
+
+def sys_text(system) -> str:
+    return "".join(b["text"] for b in system)
 
 
 # --- Assertions --------------------------------------------------------------
@@ -260,54 +279,241 @@ def check(label, cond):
     print(f"  [{mark}] {label}")
 
 
-async def test_status_when_not_fed():
-    print("Scenario: 'الكلاب اتأكلوا؟' when NOT fed")
-    fake.fed_today = None
-    brain.client = FakeClient(script_for("get_dog_status", "لسه يا زين، الكلاب مأكلوش."))
-    reply = await brain.think(MEMBER, chat_id=99, user_text="الكلاب اتأكلوا؟")
-    check("tool loop returned final text", reply == "لسه يا زين، الكلاب مأكلوش.")
-    check("two model calls (tool turn + answer)", len(brain.client.messages.calls) == 2)
-    check("second call carries tool_result in history",
-          brain.client.messages.calls[1][1][-1] == "user")
+# =============================================================================
+# Brain: model, request shape, caching
+# =============================================================================
+
+async def test_model_and_request_shape():
+    print("Scenario: Haiku 5.5 request shape (effort, max_tokens, no sampling params)")
+    brain.client = FakeClient(script_for("get_shopping_list", "الليستة فاضية."))
+    await brain.think(ZAIN, "tg:9", "عايزين إيه من السوبرماركت؟")
+    reqs = brain.client.messages.requests
+    check("model is claude-haiku-5-5 on every call", {r["model"] for r in reqs} == {"claude-haiku-5-5"})
+    check("effort set explicitly to low", all(r.get("output_config") == {"effort": "low"} for r in reqs))
+    check("max_tokens leaves room for thinking (>= 2048)", all(r["max_tokens"] >= 2048 for r in reqs))
+    check("no sampling params (they 400 on Haiku 5.5)",
+          not any(k in r for r in reqs for k in ("temperature", "top_p", "top_k")))
+    check("no thinking param (adaptive by default; budget_tokens would 400)",
+          not any("thinking" in r for r in reqs))
+    check("conversation never ends on an assistant turn (no prefill)",
+          all(r["messages"][-1]["role"] == "user" for r in reqs))
+    check("same tool list object every round (stable cached prefix)",
+          reqs[0]["tools"] is reqs[1]["tools"] is brain.ALL_TOOLS)
+    check("same system blocks every round of the turn", reqs[0]["system"] == reqs[1]["system"])
+    check("no Sonnet escalation left in the brain", not hasattr(brain, "_pick_model"))
 
 
-async def test_mark_fed_then_status():
-    print("Scenario: 'اطعمت الكلاب' marks fed, then status reports fed")
-    fake.fed_today = None
-    brain.client = FakeClient(script_for("mark_dogs_fed", "تمام، سجّلت إن الكلاب اتأكلت. 🐶"))
-    reply = await brain.think(MEMBER, chat_id=99, user_text="اطعمت الكلاب")
-    check("got a confirmation reply", "تمام" in reply)
-    check("db state flipped to fed", fake.fed_today is not None)
+def test_static_persona_cache_invariant():
+    print("Scenario: the cached persona block never varies per request")
+    a = prompts.build_system_prompt(member_name="Zain", roster="Zain, Mo", channel="telegram",
+                                    now=datetime(2026, 10, 11, 9, 0, tzinfo=TZ))
+    b = prompts.build_system_prompt(member_name="Mo", roster="Zain, Mo, Kateb", channel="room",
+                                    voice=True, now=datetime(2026, 12, 25, 23, 59, tzinfo=TZ))
+    check("two system blocks: static + dynamic", len(a) == 2 and len(b) == 2)
+    check("static block is byte-identical across speakers/times/channels/voice", a[0] == b[0])
+    check("static block is the STATIC_PERSONA constant", a[0]["text"] == prompts.STATIC_PERSONA)
+    check("cache breakpoint sits on the static block", a[0].get("cache_control") == {"type": "ephemeral"})
+    check("dynamic block carries no cache breakpoint", "cache_control" not in a[1])
+    check("speaker name only in the dynamic block",
+          "Talking to: Mo" in b[1]["text"] and "Talking to" not in prompts.STATIC_PERSONA)
+    check("date only in the dynamic block",
+          "25 December 2026" in b[1]["text"] and "December 2026" not in prompts.STATIC_PERSONA)
+    check("voice hint only in the dynamic block",
+          "SPOKEN ALOUD" in b[1]["text"] and "SPOKEN ALOUD" not in prompts.STATIC_PERSONA)
+    check("no roommate names hard-coded in the persona",
+          not any(n in prompts.STATIC_PERSONA for n in ("Zain", "Kateb", "Nour")))
+    check("dynamic block names the timezone", "America/Toronto" in a[1]["text"])
 
-    # direct tool dispatch: a second mark is idempotent for the day
-    out = await tools.run_tool("mark_dogs_fed", {}, member_id=1)
-    check("second mark is idempotent", out == "Already marked fed today.")
-    status = await tools.run_tool("get_dog_status", {}, member_id=1)
-    check("status now reports FED by name", status == "FED today (by Zain).")
 
+# =============================================================================
+# Turns, history, speakers
+# =============================================================================
+
+async def test_handle_turn_logs_and_speakers():
+    print("Scenario: handle_turn logs channel/thread/speaker; history carries speaker names")
+    fake.logged.clear()
+    # Earlier in the same group chat: Mo asked something, Abdo answered.
+    # (Plus a DM in another thread that must not leak in.)
+    fake.logged += [
+        {"thread": "tg:6", "channel": "telegram", "role": "user", "member_id": 2,
+         "content": "private DM", "modality": "text", "speaker_confidence": None},
+        {"thread": "tg:5", "channel": "telegram", "role": "user", "member_id": 2,
+         "content": "مين جاي النهاردة؟", "modality": "text", "speaker_confidence": None},
+        {"thread": "tg:5", "channel": "telegram", "role": "assistant", "member_id": 2,
+         "content": "مفيش حد مسجّل.", "modality": "text", "speaker_confidence": None},
+    ]
+    brain.client = FakeClient(reply_only("أهلاً يا زين!"))
+    reply = await turn.handle_turn(member=ZAIN, text="hi abdo", channel="telegram", thread="tg:5")
+    check("reply returned", reply == "أهلاً يا زين!")
+    sent = brain.client.messages.requests[0]["messages"]
+    check("earlier user turn prefixed with its speaker", sent[0]["content"] == "Mo: مين جاي النهاردة؟")
+    check("assistant turn left bare", sent[1] == {"role": "assistant", "content": "مفيش حد مسجّل."})
+    check("current turn prefixed with the speaker", sent[-1]["content"] == "Zain: hi abdo")
+    check("current message sent exactly once (no duplicate from early logging)",
+          sum("hi abdo" in str(m["content"]) for m in sent) == 1)
+    new = fake.logged[-2:]
+    check("user + assistant rows logged after the turn",
+          [r["role"] for r in new] == ["user", "assistant"])
+    check("rows carry thread, channel, speaker, modality",
+          all(r["thread"] == "tg:5" and r["channel"] == "telegram" and r["member_id"] == 1
+              and r["modality"] == "text" for r in new))
+    check("other threads are not mixed in",
+          not any("private DM" in str(m["content"]) for m in sent))
+
+
+async def test_history_drops_leading_assistant():
+    print("Scenario: history cut mid-pair never starts with an assistant turn")
+    rows = [{"role": "assistant", "content": "old reply", "speaker": "Zain"},
+            {"role": "user", "content": "hey", "speaker": None}]
+    msgs = brain._history_messages(rows)
+    check("leading assistant row dropped", msgs[0]["role"] == "user")
+    check("unknown speaker rendered as 'Someone'", msgs[0]["content"] == "Someone: hey")
+
+
+async def test_handle_turn_voice_and_failure():
+    print("Scenario: voice turns log modality; a crashing brain never escapes handle_turn")
+    fake.logged.clear()
+    brain.client = FakeClient(reply_only("تمام."))
+    await turn.handle_turn(member=ZAIN, text="فين المفتاح", channel="telegram",
+                           thread="tg:7", voice=True)
+    check("voice turn logged as modality=voice", all(r["modality"] == "voice" for r in fake.logged))
+    check("voice hint reached the model",
+          "SPOKEN ALOUD" in sys_text(brain.client.messages.requests[0]["system"]))
+
+    real_think = brain.think
+
+    async def boom(*a, **kw):
+        raise RuntimeError("anthropic down")
+
+    brain.think = boom
+    try:
+        fake.logged.clear()
+        reply = await turn.handle_turn(member=ZAIN, text="hello", channel="telegram", thread="tg:7")
+        check("brain crash -> honest fallback, no exception", reply == turn.FALLBACK)
+        check("the failed turn is still logged", len(fake.logged) == 2)
+    finally:
+        brain.think = real_think
+
+
+async def test_unidentified_speaker():
+    print("Scenario: an unidentified speaker (room device) still gets an answer")
+    brain.client = FakeClient(script_for("get_shopping_list", "الليستة فاضية."))
+    fake.shopping = []
+    reply = await brain.think(None, "room", "eh el na2es?", channel="room")
+    first = brain.client.messages.requests[0]
+    check("unknown speaker prefixed 'Someone:'", first["messages"][-1]["content"] == "Someone: eh el na2es?")
+    check("room channel described in context", "room speaker" in sys_text(first["system"]))
+    check("tools still run without a member id", reply == "الليستة فاضية.")
+
+
+# =============================================================================
+# Brain: stop reasons and failure handling
+# =============================================================================
+
+async def test_refusal_handled():
+    print("Scenario: stop_reason=refusal -> in-character reply, no crash")
+    brain.client = FakeClient([_resp("refusal", [], stop_details=SimpleNamespace(category="cyber"))])
+    reply = await brain.think(ZAIN, "tg:9", "something off-limits")
+    check("refusal returns the refusal line", reply == brain.REFUSAL_REPLY)
+
+
+async def test_thinking_blocks_read_by_type():
+    print("Scenario: a response that starts with a thinking block still yields its text")
+    brain.client = FakeClient([_resp("end_turn", [_thinking_block(), _text_block("أهو.")])])
+    reply = await brain.think(ZAIN, "tg:9", "test")
+    check("text extracted past the thinking block", reply == "أهو.")
+
+    # Thinking blocks must go back unmodified with tool results.
+    thinking = _thinking_block()
+    brain.client = FakeClient([
+        _resp("tool_use", [thinking, _tool_use_block("get_shopping_list", "t1")]),
+        _resp("end_turn", [_text_block("فاضية.")]),
+    ])
+    await brain.think(ZAIN, "tg:9", "الليستة؟")
+    second = brain.client.messages.requests[1]["messages"]
+    check("assistant turn echoed back with the same thinking block object",
+          second[-2]["role"] == "assistant" and second[-2]["content"][0] is thinking)
+
+
+async def test_max_tokens_without_text():
+    print("Scenario: thinking used up max_tokens (no text) -> fallback, never an empty send")
+    brain.client = FakeClient([_resp("max_tokens", [_thinking_block()])])
+    reply = await brain.think(ZAIN, "tg:9", "long question")
+    check("fallback instead of empty string", reply == brain.EMPTY_REPLY)
+
+
+async def test_empty_reply_fallback():
+    print("Scenario: model returns blank text -> safe fallback")
+    brain.client = FakeClient([_resp("end_turn", [_text_block("   ")])])
+    reply = await brain.think(ZAIN, "tg:9", "إزيك")
+    check("empty/blank model output replaced", reply == brain.EMPTY_REPLY)
+
+
+async def test_tool_failure_degrades():
+    print("Scenario: a failing tool degrades honestly (no crash, no silence)")
+    real_run_tool = brain.run_tool
+
+    async def boom(name, tool_input, member_id):
+        raise RuntimeError("calendar 404")
+
+    brain.run_tool = boom
+    try:
+        brain.client = FakeClient(script_for("get_calendar", "آسف، مش عارف أوصل للتقويم دلوقتي."))
+        reply = await brain.think(ZAIN, "tg:9", "عندنا إيه الجمعة؟")
+        check("tool exception does not crash the loop", isinstance(reply, str) and reply)
+        result = brain.client.messages.requests[1]["messages"][-1]["content"][0]
+        check("model got an ERROR tool_result flagged is_error",
+              result["is_error"] is True and result["content"].startswith("ERROR"))
+    finally:
+        brain.run_tool = real_run_tool
+
+
+async def test_tool_loop_terminates():
+    print("Scenario: tool loop is bounded (no infinite loop)")
+
+    class AlwaysToolUse:
+        def __init__(self):
+            self.n = 0
+
+        async def create(self, **kw):
+            self.n += 1
+            return _resp("tool_use", [_tool_use_block("get_shopping_list", f"t{self.n}")])
+
+    brain.client = SimpleNamespace(messages=AlwaysToolUse())
+    reply = await brain.think(ZAIN, "tg:9", "loop forever")
+    check("loop stops at the cap", brain.client.messages.n == brain.MAX_TOOL_ROUNDS)
+    check("returns a graceful fallback", reply == brain.TOO_LONG_REPLY)
+
+
+async def test_tool_dispatch_unknown():
+    print("Scenario: unknown tool name")
+    out = await tools.run_tool("does_not_exist", {}, member_id=1)
+    check("unknown tool handled gracefully", out.startswith("Unknown tool:"))
+    out = await tools.run_tool("get_dog_status", {}, member_id=1)
+    check("Egypt-era dog tool is gone", out.startswith("Unknown tool:"))
+
+
+# =============================================================================
+# Facts (RAG)
+# =============================================================================
 
 async def test_remember_and_recall_fact():
-    print("Scenario: store a household fact, then recall it (RAG tools)")
+    print("Scenario: store a household fact, then recall it")
     fake.facts.clear()
     embed_calls.clear()
-
-    # 'الواي فاي بتاعنا الباسورد بتاعه ...' -> Claude calls remember_fact
     brain.client = FakeClient([
-        SimpleNamespace(stop_reason="tool_use", content=[
-            SimpleNamespace(type="tool_use", name="remember_fact",
-                            input={"content": "The wifi password is khalil2024.",
-                                   "category": "wifi"}, id="t1")]),
-        SimpleNamespace(stop_reason="end_turn",
-                        content=[_text_block("تمام، حفظت الباسورد.")]),
+        _resp("tool_use", [_tool_use_block("remember_fact", "t1",
+                                           {"content": "The Wi-Fi password is sunflower42.",
+                                            "category": "wifi"})]),
+        _resp("end_turn", [_text_block("تمام، حفظت الباسورد.")]),
     ])
-    await brain.think(MEMBER, chat_id=99, user_text="الواي فاي الباسورد khalil2024")
+    await brain.think(ZAIN, "tg:9", "الواي فاي الباسورد sunflower42")
     check("fact persisted", len(fake.facts) == 1 and fake.facts[0]["category"] == "wifi")
     check("stored with input_type=search_document", embed_calls == ["search_document"])
 
-    # Now recall it (cross-lingual: English question).
     embed_calls.clear()
     out = await tools.run_tool("recall_facts", {"query": "what's the wifi password"}, member_id=1)
-    check("recall returns the stored fact", "khalil2024" in out and "[wifi]" in out)
+    check("recall returns the stored fact", "sunflower42" in out and "[wifi]" in out)
     check("recall used input_type=search_query", embed_calls == ["search_query"])
 
 
@@ -319,25 +525,21 @@ async def test_recall_empty():
 
 
 async def test_store_dedup():
-    print("Scenario: re-stating a fact updates the row, never duplicates (Fix 1d)")
+    print("Scenario: re-stating a fact updates the row, never duplicates")
     fake.facts.clear()
-    out = await tools.run_tool(
-        "remember_fact",
-        {"content": "The Wi-Fi password is koki2013.", "category": "wifi"}, member_id=1)
+    fact = {"content": "The Wi-Fi password is maple2026.", "category": "wifi"}
+    out = await tools.run_tool("remember_fact", fact, member_id=1)
     check("first store inserts", out == "Stored." and len(fake.facts) == 1)
-    out = await tools.run_tool(
-        "remember_fact",
-        {"content": "The Wi-Fi password is koki2013.", "category": "wifi"}, member_id=1)
+    out = await tools.run_tool("remember_fact", fact, member_id=1)
     check("re-stating the SAME fact updates in place (no second row)",
           "Updated" in out and len(fake.facts) == 1)
-    await tools.run_tool(
-        "remember_fact",
-        {"content": "The spare key is with the bawab.", "category": "location_of_things"}, member_id=1)
+    await tools.run_tool("remember_fact", {"content": "The spare key is in the kitchen drawer.",
+                                           "category": "location_of_things"}, member_id=1)
     check("a genuinely different fact still inserts", len(fake.facts) == 2)
 
 
 async def test_store_guard_invalid_embedding():
-    print("Scenario: a junk embedding is never stored as a fact (Fix 1c guard)")
+    print("Scenario: a junk embedding is never stored as a fact")
     fake.facts.clear()
     real_embed = embeddings.embed
 
@@ -346,8 +548,7 @@ async def test_store_guard_invalid_embedding():
 
     embeddings.embed = bad_embed
     try:
-        out = await tools.run_tool(
-            "remember_fact", {"content": "x", "category": "misc"}, member_id=1)
+        out = await tools.run_tool("remember_fact", {"content": "x", "category": "misc"}, member_id=1)
         check("invalid embedding returns an error, not 'Stored'", out.startswith("ERROR"))
         check("nothing was written on a bad embedding", len(fake.facts) == 0)
     finally:
@@ -358,19 +559,14 @@ def test_is_valid_robust_to_numpy():
     print("Scenario: is_valid accepts a DB-shaped (numpy float32) vector, rejects junk")
     import numpy as np
     dim = embeddings.EMBED_DIM
-    # pgvector decodes a stored vector to a numpy float32 ndarray — this is exactly
-    # what wrongly read as invalid before (isinstance(list)/isinstance(float) both fail
-    # on it), flagging good rows bad in backfill and threatening recall.
-    nd = np.full(dim, 0.0123, dtype=np.float32)
-    check("numpy float32 ndarray of len 1024 is valid", embeddings.is_valid(nd) is True)
-    check("plain python-float list of len 1024 still valid",
-          embeddings.is_valid([0.01] * dim) is True)
+    check("numpy float32 ndarray of len 1024 is valid",
+          embeddings.is_valid(np.full(dim, 0.0123, dtype=np.float32)) is True)
+    check("plain python-float list of len 1024 still valid", embeddings.is_valid([0.01] * dim) is True)
     check("None is invalid", embeddings.is_valid(None) is False)
     check("wrong length is invalid", embeddings.is_valid([0.01] * (dim // 2)) is False)
     check("numpy ndarray of wrong length is invalid",
           embeddings.is_valid(np.zeros(dim - 1, dtype=np.float32)) is False)
-    check("all-zero vector is invalid (NULL-equivalent junk)",
-          embeddings.is_valid(np.zeros(dim, dtype=np.float32)) is False)
+    check("all-zero vector is invalid", embeddings.is_valid(np.zeros(dim, dtype=np.float32)) is False)
 
 
 async def test_search_returns_db_shaped_fact():
@@ -378,149 +574,107 @@ async def test_search_returns_db_shaped_fact():
     import numpy as np
     fake.facts.clear()
     embed_calls.clear()
-    # Seed a fact whose embedding is a numpy float32 ndarray, exactly as pgvector hands
-    # rows back. The recall path must surface it (it must not silently drop valid rows).
-    fake.facts.append({"id": 6, "category": "wifi",
-                       "content": "The Wi-Fi password is koki2013.",
+    fake.facts.append({"id": 6, "category": "wifi", "content": "The Wi-Fi password is maple2026.",
                        "embedding": np.full(embeddings.EMBED_DIM, 0.02, dtype=np.float32)})
     out = await tools.run_tool("recall_facts", {"query": "what's the wifi password"}, member_id=1)
-    check("seeded wifi fact is returned by search", "koki2013" in out and "[wifi]" in out)
+    check("seeded wifi fact is returned by search", "maple2026" in out and "[wifi]" in out)
     check("recall used input_type=search_query", embed_calls == ["search_query"])
 
 
-async def test_calendar_weekday_read():
-    print("Scenario: calendar reads carry a code-resolved weekday (Fix 2)")
-    global _fake_events
-    # 2026-06-19 is a Friday; 2026-06-20 is a Saturday.
-    _fake_events = [
-        {"id": "evt1", "start": "2026-06-19", "summary": "Trip to Cairo"},
-        {"id": "evt2", "start": "2026-06-20T19:00:00", "summary": "Family dinner"},
-    ]
-    calendar_svc.is_configured = lambda: True
-    out = await tools.run_tool("get_calendar", {}, member_id=1)
-    check("all-day event shows its true weekday (Friday)", "Friday 19 June" in out)
-    check("timed event shows weekday + time (Saturday ... 19:00)",
-          "Saturday 20 June" in out and "at 19:00" in out)
-    check("event id still exposed for edits", "evt1" in out and "evt2" in out)
-
-
-async def test_orders():
-    print("Scenario: orders add/get/arrive with server-side date resolution (Fix 5)")
-    fake.orders = []
-    out = await tools.run_tool(
-        "add_order",
-        {"description": "Amazon package", "day": "tomorrow", "paid": False,
-         "ordered_by": "Zain", "tip_note": "50 EGP"}, member_id=1)
-    check("add_order confirms with id + COD", "#1" in out and "cash on delivery" in out)
-    tomorrow = (datetime.now(ZoneInfo(settings.timezone)) + timedelta(days=1)).date()
-    check("day was resolved server-side to a real date",
-          fake.orders[0]["expected_on"] == tomorrow)
-    check("orderer name mapped to a member id", fake.orders[0]["ordered_by"] == 1)
-
-    out = await tools.run_tool("get_orders", {"day": "tomorrow"}, member_id=1)
-    check("get_orders lists the pending order with who/pay/tip",
-          "Amazon package" in out and "Zain" in out and "cash on delivery" in out and "50 EGP" in out)
-
-    out = await tools.run_tool("get_orders", {}, member_id=1)   # defaults to today
-    check("a different day (today) shows no orders", "No pending orders" in out)
-
-    out = await tools.run_tool("mark_order_arrived", {"order_id": 1}, member_id=1)
-    check("mark_order_arrived confirms", "arrived" in out)
-    out = await tools.run_tool("get_orders", {"day": "tomorrow"}, member_id=1)
-    check("an arrived order leaves the pending list", "No pending orders" in out)
-
-    out = await tools.run_tool("mark_order_arrived", {"order_id": 999}, member_id=1)
-    check("marking a non-existent order errors, never fakes success", out.startswith("No pending order"))
-
-
-def test_tts_model_routing():
-    print("Scenario: digit-bearing replies route to multilingual_v2 (Fix 3b)")
-    from app import tts
-    check("a worded reply stays on Flash",
-          tts._pick_model("تمام، الساعة سبعة") == settings.tts_model)
-    check("a reply with a digit routes to multilingual_v2",
-          tts._pick_model("الساعة 7") == "eleven_multilingual_v2")
-
-
-def test_grounding_and_dialect_prompt():
-    print("Scenario: grounding rules + Egyptian dialect are in the system prompt")
-    from app.prompts import build_system_prompt
-    p = build_system_prompt("Zain", "member", "Zain (member)")
-    check("grounding mandates recall_facts before 'don't know'", "MUST call recall_facts" in p)
-    check("grounding forbids guessing weekdays", "never guess or compute a weekday" in p)
-    check("calendar confirms exactly once", "exactly ONCE" in p)
-    check("Egyptian dialect glossary present (معنديش)", "معنديش" in p)
-    check("orders capability described", "orders/deliveries" in p)
-
+# =============================================================================
+# Location
+# =============================================================================
 
 async def test_where_is():
     print("Scenario: where_is (geofence + fresh/stale tense)")
     now = datetime.now(timezone.utc)             # aware, like asyncpg returns
     fresh = now - timedelta(minutes=2)
-    # Zain exactly at home; Omar ~3km away — both freshly updated.
-    fake._loc_rows = {
-        "zain": {"name": "Zain", "lat": 30.0000, "lng": 31.0000, "updated_at": fresh},
-        "omar": {"name": "Omar", "lat": 30.0270, "lng": 31.0000, "updated_at": fresh},
+    fake.loc_rows = {
+        "zain": {"name": "Zain", "lat": 43.0000, "lng": -80.0000, "updated_at": fresh},
+        "mo": {"name": "Mo", "lat": 43.0270, "lng": -80.0000, "updated_at": fresh},
     }
     out = await tools.run_tool("where_is", {"name": "Zain"}, member_id=1)
     check("fresh reading is present tense 'is home'", "Zain is home" in out and "live" in out)
-    out = await tools.run_tool("where_is", {"name": "Omar"}, member_id=1)
+    out = await tools.run_tool("where_is", {"name": "Mo"}, member_id=1)
     check("member away reads distance", "km from home" in out)
     out = await tools.run_tool("where_is", {"name": "everyone"}, member_id=1)
-    check("'everyone' lists all sharers", "Zain" in out and "Omar" in out)
+    check("'everyone' lists all sharers", "Zain" in out and "Mo" in out)
 
-    # A stale reading (sharing stopped hours ago) must flip to PAST tense and
-    # flag itself stale, so the model can't claim they're there now.
     stale = now - timedelta(hours=9)
-    fake._loc_rows = {"zain": {"name": "Zain", "lat": 30.0, "lng": 31.0, "updated_at": stale}}
+    fake.loc_rows = {"zain": {"name": "Zain", "lat": 43.0, "lng": -80.0, "updated_at": stale}}
     out = await tools.run_tool("where_is", {"name": "Zain"}, member_id=1)
     check("stale reading is past tense 'was home'", "Zain was home" in out)
     check("stale reading flagged stale with age", "stale" in out and "~9h ago" in out)
     check("stale reading hedges current whereabouts", "may not be there now" in out)
 
-    fake._loc_rows = {}
+    fake.loc_rows = {}
     out = await tools.run_tool("where_is", {"name": "Zain"}, member_id=1)
     check("not-sharing handled", "isn't sharing" in out)
     out = await tools.run_tool("where_is", {"name": "everyone"}, member_id=1)
     check("nobody-sharing handled", out == "No one is sharing their location right now.")
 
 
+# =============================================================================
+# Calendar
+# =============================================================================
+
 async def test_get_calendar():
     print("Scenario: get_calendar")
     global _fake_events
-    _fake_events = [{"id": "evt1", "start": "2026-06-19", "summary": "Friday lunch at Teta's"}]
+    _fake_events = [{"id": "evt1", "start": "2026-10-16", "summary": "Suite dinner"}]
     out = await tools.run_tool("get_calendar", {}, member_id=1)
-    check("returns upcoming events", "Friday lunch at Teta's" in out)
+    check("returns upcoming events", "Suite dinner" in out)
     check("reader exposes event id (for edits)", "evt1" in out)
 
     _fake_events = []
     out = await tools.run_tool("get_calendar", {"days_ahead": 3}, member_id=1)
     check("empty window handled", out == "No events on the shared calendar in that window.")
 
-    # Unconfigured path.
     calendar_svc.is_configured = lambda: False
     out = await tools.run_tool("get_calendar", {}, member_id=1)
     check("unconfigured calendar handled", out == "The shared calendar isn't connected yet.")
     calendar_svc.is_configured = lambda: True   # restore
 
 
+async def test_calendar_weekday_read():
+    print("Scenario: calendar reads carry a code-resolved weekday")
+    global _fake_events
+    # 2026-10-16 is a Friday; 2026-10-17 is a Saturday.
+    _fake_events = [
+        {"id": "evt1", "start": "2026-10-16", "summary": "Midterm"},
+        {"id": "evt2", "start": "2026-10-17T19:00:00", "summary": "Dinner out"},
+    ]
+    out = await tools.run_tool("get_calendar", {}, member_id=1)
+    check("all-day event shows its true weekday (Friday)", "Friday 16 October" in out)
+    check("timed event shows weekday + time (Saturday ... 19:00)",
+          "Saturday 17 October" in out and "at 19:00" in out)
+    check("event id still exposed for edits", "evt1" in out and "evt2" in out)
+
+
+def test_event_times_shown_local():
+    print("Scenario: offset-aware event times are shown in local (Toronto) time, across DST")
+    fmt = tools._format_event
+    out = fmt({"id": "e", "summary": "x", "start": "2026-10-16T23:00:00Z"})
+    check("UTC 23:00 shows as Friday 19:00 local (EDT, -4)", "Friday 16 October 2026 at 19:00" in out)
+    out = fmt({"id": "e", "summary": "x", "start": "2026-11-03T01:30:00Z"})
+    check("UTC after the DST switch shows as Monday 20:30 local (EST, -5)",
+          "Monday 02 November 2026 at 20:30" in out)
+    out = fmt({"id": "e", "summary": "x", "start": "2026-11-02T09:00:00-05:00"})
+    check("local-offset time unchanged", "Monday 02 November 2026 at 09:00" in out)
+
+
 async def test_calendar_write():
-    print("Scenario: create_event / update_event (day+time, code resolves date)")
+    print("Scenario: create_event / update_event / delete_event (day+time, code resolves date)")
     _created_events.clear()
-    out = await tools.run_tool(
-        "create_event",
-        {"summary": "Family Gathering", "day": "tomorrow", "time": "19:00"}, member_id=1)
-    check("create echoes confirmation with id", "Family Gathering" in out and "evt_new" in out)
-    check("create actually wrote to the calendar",
-          len(_created_events) == 1 and _created_events[0]["summary"] == "Family Gathering")
-    # The model passed a spoken day; the start the tool wrote is a real resolved date.
-    tomorrow = (datetime.now(ZoneInfo(settings.timezone)) + timedelta(days=1)).date().isoformat()
-    check("spoken day was resolved to a real date in code",
+    out = await tools.run_tool("create_event",
+                               {"summary": "Suite dinner", "day": "tomorrow", "time": "19:00"},
+                               member_id=1)
+    check("create echoes confirmation with id", "Suite dinner" in out and "evt_new" in out)
+    tomorrow = (datetime.now(TZ) + timedelta(days=1)).date().isoformat()
+    check("spoken day was resolved to a real local date in code",
           _created_events[0]["start"].startswith(tomorrow + "T19:00"))
 
-    out = await tools.run_tool(
-        "update_event",
-        {"event_id": "evt_new", "time": "20:00"}, member_id=1)
+    out = await tools.run_tool("update_event", {"event_id": "evt_new", "time": "20:00"}, member_id=1)
     check("update echoes confirmation", out.startswith("Updated:") and "evt_new" in out)
 
     _deleted_events.clear()
@@ -530,32 +684,24 @@ async def test_calendar_write():
 
 
 def test_date_resolution():
-    print("Scenario: deterministic Cairo date resolution (no model arithmetic)")
-    from zoneinfo import ZoneInfo as _ZI
-    from datetime import datetime as _dt, date as _date
-    now = _dt(2026, 6, 17, 12, 0, tzinfo=_ZI(settings.timezone))   # a Wednesday
+    print("Scenario: deterministic local date resolution (no model arithmetic)")
+    now = datetime(2026, 10, 14, 12, 0, tzinfo=TZ)   # a Wednesday
     r = calendar_svc.resolve_date
     check("'today' -> today's date", r("today", now=now) == now.date())
     check("'tomorrow' -> +1 day", r("tomorrow", now=now) == now.date() + timedelta(days=1))
-    check("'day after tomorrow' -> +2 days",
-          r("day after tomorrow", now=now) == now.date() + timedelta(days=2))
-    check("explicit ISO date passes through", r("2026-06-19", now=now) == _date(2026, 6, 19))
-    # The classic Haiku bug: 'Wednesday' must land on a real Wednesday (the 17th, today).
-    check("'Wednesday' on a Wednesday -> that same Wednesday",
-          r("Wednesday", now=now) == _date(2026, 6, 17) and r("Wednesday", now=now).weekday() == 2)
-    # A weekday later in the week resolves to its real date, not an arithmetic guess.
-    check("'Friday' -> the coming Friday (19th)",
-          r("Friday", now=now) == _date(2026, 6, 19) and r("Friday", now=now).weekday() == 4)
-    check("Arabic weekday 'السبت' -> the coming Saturday (20th)",
-          r("السبت", now=now) == _date(2026, 6, 20))
-    check("Franco weekday 'el 7ad' style ('7ad') -> the coming Sunday (21st)",
-          r("7ad", now=now) == _date(2026, 6, 21))
-    check("'next Wednesday' jumps a full week (+7)",
-          r("next Wednesday", now=now) == _date(2026, 6, 24))
-    # Every resolved weekday actually matches the named weekday — never off by a day.
+    check("'day after tomorrow' -> +2 days", r("day after tomorrow", now=now) == date(2026, 10, 16))
+    check("explicit ISO date passes through", r("2026-10-16", now=now) == date(2026, 10, 16))
+    check("'Wednesday' on a Wednesday -> that same Wednesday", r("Wednesday", now=now) == date(2026, 10, 14))
+    check("'Friday' -> the coming Friday (16th)", r("Friday", now=now) == date(2026, 10, 16))
+    check("Arabic weekday 'السبت' -> the coming Saturday (17th)", r("السبت", now=now) == date(2026, 10, 17))
+    check("Franco weekday '7ad' -> the coming Sunday (18th)", r("7ad", now=now) == date(2026, 10, 18))
+    check("'next Wednesday' jumps a full week (+7)", r("next Wednesday", now=now) == date(2026, 10, 21))
     names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     check("every weekday name resolves to its true weekday",
           all(r(n, now=now).weekday() == i for i, n in enumerate(names)))
+    # Across the DST switch (Nov 1, 2026): Saturday Oct 31 -> "Monday" is Nov 2.
+    sat = datetime(2026, 10, 31, 23, 30, tzinfo=TZ)
+    check("weekday resolution correct across the DST change", r("Monday", now=sat) == date(2026, 11, 2))
     try:
         r("someday", now=now)
         check("gibberish day raises (no silent guess)", False)
@@ -577,13 +723,11 @@ async def test_calendar_read_guard():
         out = await tools.run_tool("get_calendar", {}, member_id=1)
         check("failed read does NOT say 'No events'", "No events" not in out)
         check("failed read returns an honest error", out.startswith("ERROR"))
-        check("failed read tells the model not to create off it",
-              "do NOT create" in out or "do not create" in out.lower())
+        check("failed read tells the model not to create off it", "do NOT create" in out)
         check("read was retried once before giving up", attempts["n"] == 2)
     finally:
         calendar_svc.get_events = real_get_events
 
-    # A genuinely empty calendar is still distinct from a failed one.
     global _fake_events
     _fake_events = []
     out = await tools.run_tool("get_calendar", {}, member_id=1)
@@ -605,236 +749,269 @@ async def test_calendar_not_found_guard():
     calendar_svc.delete_event = delete_missing
     try:
         out = await tools.run_tool("update_event", {"event_id": "made_up", "time": "20:00"}, member_id=1)
-        check("update of missing id returns an error, not success",
-              out.startswith("ERROR") and "made_up" in out)
+        check("update of missing id returns an error", out.startswith("ERROR") and "made_up" in out)
         out = await tools.run_tool("delete_event", {"event_id": "made_up"}, member_id=1)
-        check("delete of missing id returns an error, not success",
-              out.startswith("ERROR") and "made_up" in out)
+        check("delete of missing id returns an error", out.startswith("ERROR") and "made_up" in out)
     finally:
         calendar_svc.update_event = real_update
         calendar_svc.delete_event = real_delete
 
 
+# =============================================================================
+# Shopping list + packages
+# =============================================================================
+
 async def test_shopping_list():
     print("Scenario: shared shopping list (add / view / buy / clear)")
     fake.shopping = []
-
     out = await tools.run_tool("get_shopping_list", {}, member_id=1)
     check("empty list reads empty", out == "The shopping list is empty.")
-
-    out = await tools.run_tool("add_to_shopping_list", {"item": "milk", "qty": "2 kilo"}, member_id=1)
+    out = await tools.run_tool("add_to_shopping_list", {"item": "milk", "qty": "2 bags"}, member_id=1)
     check("add confirms the item", "milk" in out and "Added" in out)
     await tools.run_tool("add_to_shopping_list", {"item": "bread"}, member_id=1)
-
     out = await tools.run_tool("add_to_shopping_list", {"item": "Milk"}, member_id=1)
     check("duplicate (case-insensitive) rejected", "already on the list" in out)
-
     out = await tools.run_tool("get_shopping_list", {}, member_id=1)
-    check("list shows both items", "milk" in out and "bread" in out)
-    check("quantity rendered when present", "(2 kilo)" in out)
-
+    check("list shows both items with quantity", "milk" in out and "bread" in out and "(2 bags)" in out)
     out = await tools.run_tool("mark_item_bought", {"item": "milk"}, member_id=1)
     check("marking bought confirms", "milk" in out and "bought" in out)
     out = await tools.run_tool("get_shopping_list", {}, member_id=1)
     check("bought item leaves the open list", "milk" not in out and "bread" in out)
-
     out = await tools.run_tool("mark_item_bought", {"item": "eggs"}, member_id=1)
     check("buying an absent item is honest", "isn't on the list" in out)
-
     out = await tools.run_tool("clear_shopping_list", {}, member_id=1)
     check("clear reports the count", "Cleared 1 item" in out)
-    out = await tools.run_tool("get_shopping_list", {}, member_id=1)
-    check("list empty after clear", out == "The shopping list is empty.")
 
 
-async def test_calendar_runs_on_haiku():
-    print("Scenario: calendar turns now run on Haiku (Sonnet escalation retired)")
-    check("Sonnet escalation removed from brain", not hasattr(brain, "_pick_model"))
-    # A calendar turn through the real tool loop must call the model on Haiku.
-    _fake_events.clear()
-    brain.client = FakeClient(script_for("get_calendar", "مفيش حاجة في التقويم الفترة دي."))
-    await brain.think(MEMBER, chat_id=99, user_text="زود ميعاد يوم الجمعة الساعة 7")
-    models_used = {m for m, _ in brain.client.messages.calls}
-    check("every model call on a calendar turn used Haiku", models_used == {brain.HAIKU})
-    # And a plain chat turn is Haiku too (everyday driver unchanged).
-    fake.fed_today = None
-    brain.client = FakeClient(script_for("get_dog_status", "لسه يا زين."))
-    await brain.think(MEMBER, chat_id=99, user_text="الكلاب اتأكلوا؟")
-    check("plain chat also on Haiku",
-          {m for m, _ in brain.client.messages.calls} == {brain.HAIKU})
+async def test_packages():
+    print("Scenario: packages (add / list / arrive / pick up), dates and owners resolved in code")
+    fake.packages = []
+    out = await tools.run_tool("add_package", {"description": "desk lamp", "carrier": "Amazon",
+                                               "day": "tomorrow"}, member_id=1)
+    check("add confirms with id", out.startswith("Recorded package #1") and "desk lamp" in out)
+    tomorrow = (datetime.now(TZ) + timedelta(days=1)).date()
+    check("day resolved to a real date in code", fake.packages[0]["expected_on"] == tomorrow)
+    check("owner defaults to the speaker", fake.packages[0]["owner_id"] == 1)
+
+    out = await tools.run_tool("add_package", {"description": "textbook", "owner": "Mo"}, member_id=1)
+    check("owner by name resolves to that member", fake.packages[1]["owner_id"] == 2)
+    check("no date is fine", "no expected date" in out and fake.packages[1]["expected_on"] is None)
+
+    out = await tools.run_tool("add_package", {"description": "x", "owner": "Bob"}, member_id=1)
+    check("unknown owner errors instead of guessing", out.startswith("ERROR") and len(fake.packages) == 2)
+    out = await tools.run_tool("add_package", {"description": "x", "day": "someday"}, member_id=1)
+    check("bad day errors instead of guessing", out.startswith("ERROR") and len(fake.packages) == 2)
+
+    out = await tools.run_tool("get_packages", {}, member_id=1)
+    check("list shows both with owners and ids",
+          "#1 desk lamp (Amazon) for Zain" in out and "#2 textbook for Mo" in out)
+    out = await tools.run_tool("get_packages", {"owner": "Mo"}, member_id=1)
+    check("owner filter works", "textbook" in out and "desk lamp" not in out)
+
+    out = await tools.run_tool("update_package", {"package_id": 1, "status": "arrived"}, member_id=1)
+    check("arrived confirms", "now arrived" in out)
+    out = await tools.run_tool("get_packages", {}, member_id=1)
+    check("arrived package flagged for pickup", "ARRIVED" in out)
+    await tools.run_tool("update_package", {"package_id": 1, "status": "picked_up"}, member_id=1)
+    out = await tools.run_tool("get_packages", {}, member_id=1)
+    check("picked-up package leaves the open list", "desk lamp" not in out)
+    out = await tools.run_tool("update_package", {"package_id": 1, "status": "arrived"}, member_id=1)
+    check("closed package can't be changed (honest error)", out.startswith("ERROR"))
+    out = await tools.run_tool("update_package", {"package_id": 99, "status": "arrived"}, member_id=1)
+    check("unknown id errors, never fakes success", out.startswith("ERROR"))
 
 
-async def test_voice_brain_threads_flag():
-    print("Scenario: brain.think(voice=True) reaches the model with the spoken-reply hint")
-    fake.fed_today = None
-    brain.client = FakeClient(script_for("get_dog_status", "لسه يا زين."))
-    await brain.think(MEMBER, chat_id=99, user_text="الكلاب اتأكلوا؟", voice=True)
-    check("voice hint present in the system prompt sent to the model",
-          all("SPOKEN ALOUD" in s for s in brain.client.messages.systems))
-    # The text path (default voice=False) must NOT carry the hint.
-    brain.client = FakeClient(script_for("get_dog_status", "لسه يا زين."))
-    await brain.think(MEMBER, chat_id=99, user_text="الكلاب اتأكلوا؟")
-    check("text path keeps the un-voiced prompt",
-          all("SPOKEN ALOUD" not in s for s in brain.client.messages.systems))
+# =============================================================================
+# Prompt content
+# =============================================================================
+
+def test_prompt_content():
+    print("Scenario: persona keeps grounding, dialect, honesty; describes the suite's tools")
+    p = prompts.STATIC_PERSONA
+    check("grounding mandates recall_facts before 'don't know'", "MUST call recall_facts" in p)
+    check("grounding forbids guessing weekdays", "never guess or compute a weekday" in p)
+    check("calendar confirms exactly once", "exactly ONCE" in p)
+    check("Egyptian dialect glossary present (معنديش)", "معنديش" in p)
+    check("mirrors the speaker's language mix", "mirror the person" in p)
+    check("packages capability described", "packages" in p and "get_packages" in p)
+    check("speaker-prefix convention explained", "starts with the speaker's name" in p)
+    check("web search defers to household memory", "search the web" in p and "recall_facts" in p)
+    check("dogs are gone", "dog" not in p.lower())
+    check("money is CAD", "Canadian dollars" in p)
 
 
-async def test_empty_reply_fallback():
-    print("Scenario: model returns no text -> safe fallback, never an empty send")
-    brain.client = FakeClient([
-        SimpleNamespace(stop_reason="end_turn", content=[_text_block("   ")]),
-    ])
-    reply = await brain.think(MEMBER, chat_id=99, user_text="إزيك")
-    check("empty/blank model output replaced", isinstance(reply, str) and reply.strip() != "")
+def test_voice_prompt():
+    print("Scenario: voice hint (spoken replies, numbers as words, dictation carve-out)")
+    voice = prompts.dynamic_context(member_name="Zain", roster="Zain", channel="telegram", voice=True)
+    text = prompts.dynamic_context(member_name="Zain", roster="Zain", channel="telegram")
+    check("text context has no voice hint", "SPOKEN ALOUD" not in text)
+    check("voice context adds the spoken-reply hint", "SPOKEN ALOUD" in voice)
+    check("numbers as words, in dollars", "تلاتين دولار" in voice)
+    check("carve-out for exact dictation", "heard EXACTLY" in voice and "password" in voice)
+    check("carve-out drops the disfluency", "no \"uhh\"" in voice)
+    check("spelling example uses the fake password", "S-U-N-4-2" in voice)
 
 
-async def test_tool_failure_degrades():
-    print("Scenario: a failing tool degrades honestly (no crash, no silence)")
-    # Simulate a broken tool (bad calendar id / Cohere down): run_tool raises.
-    real_run_tool = brain.run_tool
+async def test_web_search_offered_and_household_routes_to_recall():
+    print("Scenario: web search offered for current info; household Q routes to recall_facts")
+    brain.client = FakeClient(reply_only("الجو برد شوية النهاردة، حوالي خمس درجات."))
+    reply = await brain.think(ZAIN, "tg:9", "el gaw 3amel eh enharda?")
+    offered = brain.client.messages.requests[0]["tools"]
+    ws = next((t for t in offered if t.get("name") == "web_search"), None)
+    check("web_search server tool is offered", ws is not None)
+    check("web_search pinned to the basic variant for Haiku", ws and ws["type"] == "web_search_20250305")
+    check("household tools offered alongside it", any(t.get("name") == "recall_facts" for t in offered))
+    check("current-info question got a normal text answer", isinstance(reply, str) and reply)
 
-    async def boom(name, tool_input, member_id):
-        raise RuntimeError("calendar 404")
-
-    brain.run_tool = boom
-    try:
-        brain.client = FakeClient(script_for(
-            "get_calendar", "آسف، مش عارف أوصل للتقويم دلوقتي."))
-        reply = await brain.think(MEMBER, chat_id=99, user_text="عندنا إيه الجمعة؟")
-        check("tool exception does not crash the loop", isinstance(reply, str) and reply)
-        # The model's turn after the failure must have received an ERROR result.
-        last = brain.client.messages.calls[-1]
-        check("model was given an error tool_result to react to", last[1][-1] == "user")
-    finally:
-        brain.run_tool = real_run_tool
+    fake.facts.clear()
+    embed_calls.clear()
+    brain.client = FakeClient(script_for("recall_facts", "الباسورد ...", {"query": "wifi password"}))
+    await brain.think(ZAIN, "tg:9", "الواي فاي الباسورد إيه؟")
+    check("household question routed to recall_facts, not the web", embed_calls == ["search_query"])
 
 
-async def test_tool_loop_terminates():
-    print("Scenario: tool loop is bounded (no infinite loop)")
-
-    class AlwaysToolUse:
-        def __init__(self):
-            self.calls = 0
-
-        async def create(self, **kw):
-            self.calls += 1
-            return SimpleNamespace(stop_reason="tool_use",
-                                   content=[_tool_use_block("get_dog_status", f"t{self.calls}")])
-
-    class AlwaysToolClient:
-        def __init__(self):
-            self.messages = AlwaysToolUse()
-
-    brain.client = AlwaysToolClient()
-    reply = await brain.think(MEMBER, chat_id=99, user_text="loop forever")
-    check("loop stops at the cap", brain.client.messages.calls == brain.MAX_TOOL_ROUNDS)
-    check("returns a graceful fallback", isinstance(reply, str) and len(reply) > 0)
-
-
-async def test_tool_dispatch_unknown():
-    print("Scenario: unknown tool name")
-    out = await tools.run_tool("does_not_exist", {}, member_id=1)
-    check("unknown tool handled gracefully", out.startswith("Unknown tool:"))
-
+# =============================================================================
+# Telegram channel
+# =============================================================================
 
 def test_parse_update():
     print("Scenario: telegram.parse_update (typed payloads)")
     text_update = {"message": {"chat": {"id": 5}, "from": {"id": 7}, "text": "hi"}}
     check("parses a text message", telegram.parse_update(text_update) ==
           {"chat_id": 5, "from_user": {"id": 7}, "kind": "text", "text": "hi"})
-
-    # Live location arrives as edited_message.
     loc_update = {"edited_message": {"chat": {"id": 5}, "from": {"id": 7},
-                                     "location": {"latitude": 30.1, "longitude": 31.2}}}
+                                     "location": {"latitude": 43.1, "longitude": -80.2}}}
     check("parses a live-location edit", telegram.parse_update(loc_update) ==
-          {"chat_id": 5, "from_user": {"id": 7}, "kind": "location", "lat": 30.1, "lng": 31.2})
-
+          {"chat_id": 5, "from_user": {"id": 7}, "kind": "location", "lat": 43.1, "lng": -80.2})
     voice_update = {"message": {"chat": {"id": 5}, "from": {"id": 7},
                                 "voice": {"file_id": "vf1", "duration": 4}}}
     check("parses a voice message", telegram.parse_update(voice_update) ==
-          {"chat_id": 5, "from_user": {"id": 7}, "kind": "voice",
-           "file_id": "vf1", "duration": 4})
-
+          {"chat_id": 5, "from_user": {"id": 7}, "kind": "voice", "file_id": "vf1", "duration": 4})
     photo = {"message": {"chat": {"id": 5}, "from": {"id": 7}, "photo": [{"file_id": "x"}]}}
     check("ignores unsupported (photo) update", telegram.parse_update(photo) is None)
     check("ignores sender-less update", telegram.parse_update({"message": {"chat": {"id": 5}}}) is None)
     check("ignores empty update", telegram.parse_update({}) is None)
 
 
-async def test_web_search_offered_and_household_routes_to_recall():
-    print("Scenario: web search offered for current info; household Q routes to recall_facts")
-    # Current-info question: the server-side web_search tool must be in the toolset offered
-    # to the model (Claude runs the search server-side and answers in the same turn, so
-    # there's nothing for the client loop to dispatch — we just answer with text).
-    brain.client = FakeClient([
-        SimpleNamespace(stop_reason="end_turn",
-                        content=[_text_block("الجو النهاردة حر شوية، حوالي تلاتين درجة.")]),
-    ])
-    reply = await brain.think(MEMBER, chat_id=99, user_text="الجو عامل إيه النهاردة في القاهرة؟")
-    offered = {t.get("name") for t in brain.client.messages.last_tools}
-    check("web_search server tool is offered to the model", "web_search" in offered)
-    ws = next(t for t in brain.client.messages.last_tools if t.get("name") == "web_search")
-    check("web_search uses a server-tool type (web_search_*)",
-          str(ws.get("type", "")).startswith("web_search_"))
-    check("custom household tools still offered alongside it (recall_facts)",
-          "recall_facts" in offered)
-    check("current-info question got a normal text answer", isinstance(reply, str) and reply)
+def test_telegram_webhook():
+    print("Scenario: Telegram webhook routes through handle_turn (secrets, identity, location, text, voice)")
+    from fastapi.testclient import TestClient
+    from app import stt, tts
+    from app.channels import telegram as tg_channel
+    from app.main import app
 
-    # A household question still routes to the client-side recall_facts tool, NOT the web.
-    fake.facts.clear()
-    embed_calls.clear()
-    brain.client = FakeClient([
-        SimpleNamespace(stop_reason="tool_use", content=[
-            SimpleNamespace(type="tool_use", name="recall_facts",
-                            input={"query": "wifi password"}, id="r1")]),
-        SimpleNamespace(stop_reason="end_turn", content=[_text_block("الباسورد بتاع الواي فاي ...")]),
-    ])
-    await brain.think(MEMBER, chat_id=99, user_text="الواي فاي بتاعنا الباسورد إيه؟")
-    # recall_facts ran (its embed uses input_type=search_query) — proves household → recall.
-    check("household question routed to recall_facts (client tool), not the web",
-          embed_calls == ["search_query"])
+    sent, voices = [], []
+
+    async def send_message(chat_id, text):
+        sent.append((chat_id, text))
+
+    async def send_voice(chat_id, ogg):
+        voices.append((chat_id, ogg))
+
+    async def noop(*a, **kw):
+        return None
+
+    async def get_file_path(file_id):
+        return "voice/file.ogg"
+
+    async def download_file(path):
+        return b"ogg-bytes"
+
+    async def transcribe(audio):
+        return "فين المفتاح؟"
+
+    async def synthesize(text):
+        return b"ogg-reply"
+
+    patches = {telegram: dict(send_message=send_message, send_voice=send_voice, send_typing=noop,
+                              send_recording=noop, get_file_path=get_file_path,
+                              download_file=download_file),
+               stt: dict(transcribe=transcribe), tts: dict(synthesize=synthesize)}
+    saved = {mod: {k: getattr(mod, k) for k in attrs} for mod, attrs in patches.items()}
+    for mod, attrs in patches.items():
+        for k, v in attrs.items():
+            setattr(mod, k, v)
+
+    client = TestClient(app)   # no context manager -> lifespan (real DB pool) not started
+    hdr = {"X-Telegram-Bot-Api-Secret-Token": "test-secret"}
+    try:
+        def post(update, path="/tg/test-secret", headers=hdr):
+            return client.post(path, json=update, headers=headers)
+
+        text_update = {"message": {"chat": {"id": 5}, "from": {"id": 111}, "text": "إزيك يا عبده"}}
+        check("bad path secret -> 403", post(text_update, path="/tg/wrong").status_code == 403)
+        check("bad header secret -> 403",
+              post(text_update, headers={"X-Telegram-Bot-Api-Secret-Token": "x"}).status_code == 403)
+
+        sent.clear()
+        r = post({"message": {"chat": {"id": 5}, "from": {"id": 999}, "text": "hi"}})
+        check("unknown sender gets the polite refusal",
+              r.status_code == 200 and sent == [(5, tg_channel.UNKNOWN_SENDER)])
+
+        sent.clear()
+        fake.locations.clear()
+        r = post({"edited_message": {"chat": {"id": 5}, "from": {"id": 111},
+                                     "location": {"latitude": 43.0, "longitude": -80.0}}})
+        check("location ping recorded silently (no reply)",
+              r.status_code == 200 and sent == [] and fake.locations == {1: (43.0, -80.0)})
+
+        sent.clear()
+        fake.logged.clear()
+        brain.client = FakeClient(reply_only("الحمد لله، وانت؟"))
+        r = post(text_update)
+        check("text reply delivered", r.status_code == 200 and sent == [(5, "الحمد لله، وانت؟")])
+        check("turn logged under thread tg:<chat_id> as the sender",
+              [(x["thread"], x["member_id"], x["role"]) for x in fake.logged]
+              == [("tg:5", 1, "user"), ("tg:5", 1, "assistant")])
+
+        sent.clear()
+        voices.clear()
+        fake.logged.clear()
+        brain.client = FakeClient(reply_only("في الدرج."))
+        r = post({"message": {"chat": {"id": 5}, "from": {"id": 222},
+                              "voice": {"file_id": "vf1", "duration": 3}}})
+        check("voice webhook returns 200 immediately", r.status_code == 200)
+        check("voice: text first, then the voice note",
+              sent == [(5, "في الدرج.")] and voices == [(5, b"ogg-reply")])
+        check("voice turn logged as Mo with modality=voice",
+              all(x["member_id"] == 2 and x["modality"] == "voice" for x in fake.logged)
+              and fake.logged[0]["content"] == "فين المفتاح؟")
+
+        sent.clear()
+        post({"message": {"chat": {"id": 5}, "from": {"id": 111},
+                          "voice": {"file_id": "vf2", "duration": 999}}})
+        check("over-long voice note politely declined", sent == [(5, tg_channel.TOO_LONG_VOICE)])
+
+        check("health endpoint reports the version",
+              client.get("/").json()["version"].endswith("suite-rehome"))
+    finally:
+        for mod, attrs in saved.items():
+            for k, v in attrs.items():
+                setattr(mod, k, v)
 
 
-def test_web_search_prompt_guidance():
-    print("Scenario: prompt tells Abdo to search only for current/external info, recall first")
-    from app.prompts import build_system_prompt
-    p = build_system_prompt("Zain", "member", "Zain (member)")
-    check("web search capability described", "search the web" in p)
-    check("web search defers to household memory first (recall_facts)", "recall_facts" in p)
-
-
-def test_dictation_carveout_prompt():
-    print("Scenario: voice prompt drops filler/uhhs when dictating literal strings")
-    from app.prompts import build_system_prompt
-    voice_p = build_system_prompt("Zain", "member", "Zain (member)", voice=True)
-    text_p = build_system_prompt("Zain", "member", "Zain (member)")
-    check("voice prompt carves out exact-dictation cases", "must be heard" in voice_p.lower()
-          or "heard EXACTLY" in voice_p)
-    check("carve-out names a password as a clean-dictation case", "password" in voice_p)
-    check("carve-out drops the disfluency for codes", "no \"uhh\"" in voice_p or "no filler" in voice_p)
-    check("dictation carve-out is voice-only (text path unaffected)",
-          "accuracy beats personality" not in text_p)
-
-
-def test_voice_mode_prompt():
-    print("Scenario: voice flag shortens the prompt for the ear (text path unchanged)")
-    from app.prompts import build_system_prompt
-    text_p = build_system_prompt("Zain", "member", "Zain (member)")
-    voice_p = build_system_prompt("Zain", "member", "Zain (member)", voice=True)
-    check("text prompt has no voice hint", "SPOKEN ALOUD" not in text_p)
-    check("voice prompt adds the spoken-reply hint", "SPOKEN ALOUD" in voice_p)
-    check("voice prompt steers numbers-as-words", "words" in voice_p)
-
-
-def test_mark_result_parsing():
-    print("Scenario: db.mark_dogs_fed result parsing logic")
-    # The real query returns command tags like "INSERT 0 1" / "INSERT 0 0".
-    check("'INSERT 0 1' => fresh feeding", "INSERT 0 1".endswith("1"))
-    check("'INSERT 0 0' => already fed", not "INSERT 0 0".endswith("1"))
+def test_tts_model_routing():
+    print("Scenario: digit-bearing replies route to multilingual_v2")
+    from app import tts
+    check("a worded reply stays on Flash", tts._pick_model("تمام، الساعة سبعة") == settings.tts_model)
+    check("a reply with a digit routes to multilingual_v2",
+          tts._pick_model("الساعة 7") == "eleven_multilingual_v2")
 
 
 async def main():
-    await test_status_when_not_fed()
-    await test_mark_fed_then_status()
+    await test_model_and_request_shape()
+    test_static_persona_cache_invariant()
+    await test_handle_turn_logs_and_speakers()
+    await test_history_drops_leading_assistant()
+    await test_handle_turn_voice_and_failure()
+    await test_unidentified_speaker()
+    await test_refusal_handled()
+    await test_thinking_blocks_read_by_type()
+    await test_max_tokens_without_text()
+    await test_empty_reply_fallback()
+    await test_tool_failure_degrades()
+    await test_tool_loop_terminates()
+    await test_tool_dispatch_unknown()
     await test_remember_and_recall_fact()
     await test_recall_empty()
     await test_store_dedup()
@@ -844,29 +1021,24 @@ async def main():
     await test_where_is()
     await test_get_calendar()
     await test_calendar_weekday_read()
+    test_event_times_shown_local()
     await test_calendar_write()
     test_date_resolution()
     await test_calendar_read_guard()
     await test_calendar_not_found_guard()
     await test_shopping_list()
-    await test_orders()
-    await test_calendar_runs_on_haiku()
-    await test_voice_brain_threads_flag()
-    await test_empty_reply_fallback()
-    await test_tool_failure_degrades()
-    await test_tool_loop_terminates()
-    await test_tool_dispatch_unknown()
+    await test_packages()
+    test_prompt_content()
+    test_voice_prompt()
     await test_web_search_offered_and_household_routes_to_recall()
-    test_web_search_prompt_guidance()
-    test_dictation_carveout_prompt()
     test_parse_update()
-    test_voice_mode_prompt()
     test_tts_model_routing()
-    test_grounding_and_dialect_prompt()
-    test_mark_result_parsing()
     print(f"\n{passed} passed, {failed} failed")
-    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+    # TestClient runs its own event loop, so the webhook test runs outside asyncio.run.
+    test_telegram_webhook()
+    print(f"\nTOTAL: {passed} passed, {failed} failed")
+    sys.exit(1 if failed else 0)
