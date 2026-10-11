@@ -9,3 +9,6 @@ next.txt
 *service-account*.json
 *-key.json
 serious-hall-*.json
+
+# Private household details (names, ids, coordinates, draft env). Never commit.
+local/
