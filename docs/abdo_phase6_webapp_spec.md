@@ -223,7 +223,7 @@ result) and the code-input component.
 - [x] `channels/web.py`: auth, chat, voice, lists, packages, calendar, push
 - [x] `tts.synthesize_mp3`, `push.py`, `scripts/gen_vapid.py`
 - [x] `web/`: React app, PWA manifest + service worker, design system, 5 screens
-- [ ] Dockerfile + `.dockerignore` written; Railway build verified; Nixpacks files removed (after first green Docker deploy)
+- [x] Dockerfile + `.dockerignore`; Railway Docker build verified; Procfile + nixpacks.toml removed (Procfile's `$PORT` start command overrode the Dockerfile CMD unexpanded)
 - [x] Tests green (backend 227 checks; frontend typecheck + 10 Vitest + build; SW verified in real Chrome) (backend smoke + frontend typecheck/build/Vitest)
 - [ ] Railway env: `SESSION_PEPPER`, `VAPID_*`; migration applied; deploy
 - [ ] Live checks: install on iPhone + Android, log in, text + voice chat, history shared with

@@ -144,7 +144,10 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
 - **Service workers don't run in the desktop app's built-in preview browser**. Test the
   PWA/push in real Chrome or on a phone. iOS push only works from the Home Screen app (16.4+).
 - **Deploy is the `Dockerfile`** (Node builds `web/`, Python 3.13 runs the app, ffmpeg
-  installed). `GET /` serves the web app; the version marker is at `GET /api/health`.
+  installed). `GET /` serves the web app; the version marker is at `GET /api/health`. Don't
+  add a Procfile or a Railway custom start command: Railway runs those without a shell, so
+  `$PORT` arrives literally ("'$PORT' is not a valid integer"). The Dockerfile `CMD` goes
+  through `sh -c` and expands it.
 
 ## Commands
 
