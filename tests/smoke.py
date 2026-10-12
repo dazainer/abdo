@@ -15,6 +15,9 @@ import sys
 from types import SimpleNamespace
 
 # --- Fake env so config.Settings() loads without a real .env -----------------
+# Settings reads ".env" from the working directory. Run from tests/ (which has none)
+# so a developer's real keys, push config, and calendar never leak into the tests.
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-fake")
 os.environ.setdefault("COHERE_API_KEY", "co-fake")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123:fake")
@@ -46,6 +49,9 @@ class FakeDB:
         self.codes = []
         self.sessions = {}
         self.push_subs = {}
+        self.reminders = []
+        self.sent_log = set()
+        self.statuses = {}
 
     # members
     async def get_member_by_telegram_id(self, tg_id):
@@ -114,6 +120,69 @@ class FakeDB:
 
     async def delete_session(self, token_hash):
         self.sessions.pop(token_hash, None)
+
+    # members + prefs
+    async def all_members(self):
+        return [MEMBERS[i] for i in sorted(MEMBERS)]
+
+    async def set_member_prefs(self, member_id, updates):
+        MEMBERS[member_id]["prefs"] = {**(MEMBERS[member_id].get("prefs") or {}), **updates}
+        return dict(MEMBERS[member_id]["prefs"])
+
+    # reminders
+    async def add_reminder(self, member_id, text, due_at, created_by):
+        self._rem_seq = getattr(self, "_rem_seq", 0) + 1
+        self.reminders.append({"id": self._rem_seq, "member_id": member_id, "text": text,
+                               "due_at": due_at, "created_by": created_by, "done": False})
+        return self._rem_seq
+
+    def _rem_row(self, r):
+        return {**r, "member_name": NAMES.get(r["member_id"]),
+                "created_by_name": NAMES.get(r["created_by"])}
+
+    async def upcoming_reminders(self, member_id=None):
+        rows = [r for r in self.reminders if not r["done"]
+                and (member_id is None or r["member_id"] == member_id)]
+        return [self._rem_row(r) for r in sorted(rows, key=lambda r: r["due_at"])]
+
+    async def cancel_reminder(self, reminder_id, member_id=None):
+        for r in self.reminders:
+            if r["id"] == reminder_id and not r["done"] and \
+                    (member_id is None or member_id in (r["member_id"], r["created_by"])):
+                r["done"] = True
+                return r["text"]
+        return None
+
+    async def due_reminder_ids(self, now):
+        return [r["id"] for r in sorted(self.reminders, key=lambda r: r["due_at"])
+                if not r["done"] and r["due_at"] <= now]
+
+    async def claim_reminder(self, reminder_id):
+        for r in self.reminders:
+            if r["id"] == reminder_id and not r["done"]:
+                r["done"] = True
+                return self._rem_row(r)
+        return None
+
+    async def claim_daily(self, member_id, kind, local_date):
+        key = (member_id, kind, local_date)
+        if key in self.sent_log:
+            return False
+        self.sent_log.add(key)
+        return True
+
+    # status
+    async def set_status(self, member_id, text, until_at):
+        self.statuses[member_id] = {"member_id": member_id, "name": NAMES[member_id], "text": text,
+                                    "until_at": until_at, "updated_at": datetime.now(timezone.utc)}
+
+    async def clear_status(self, member_id):
+        return self.statuses.pop(member_id, None) is not None
+
+    async def current_statuses(self):
+        now = datetime.now(timezone.utc)
+        return [s for _, s in sorted(self.statuses.items())
+                if s["until_at"] is None or s["until_at"] > now]
 
     # push
     async def save_push_subscription(self, member_id, endpoint, p256dh, auth):
@@ -218,6 +287,9 @@ for _name in ("get_member_by_telegram_id", "roster_string", "get_member_id_by_na
               "latest_live_login_code", "bump_login_code_attempts", "use_login_code",
               "create_session", "session_member", "touch_session", "delete_session",
               "save_push_subscription", "delete_push_subscription", "push_subscriptions_for",
+              "all_members", "set_member_prefs", "add_reminder", "upcoming_reminders",
+              "cancel_reminder", "due_reminder_ids", "claim_reminder", "claim_daily",
+              "set_status", "clear_status", "current_statuses",
               "log_message", "recent_messages", "add_fact", "nearest_fact", "update_fact",
               "search_facts", "upsert_location", "get_location", "get_all_locations",
               "add_shopping_item", "get_shopping_list", "mark_item_bought",
@@ -1357,6 +1429,321 @@ def test_web_app():
         settings.session_pepper = None
 
 
+# =============================================================================
+# Phase 7a: proactive Abdo
+# =============================================================================
+
+def test_resolve_due_and_until():
+    print("Scenario: reminder/status times are resolved in code (timers, day+time, DST, past)")
+    rd, ru, TE = tools.resolve_due, tools.resolve_until, tools.TimeError_
+    now = datetime(2026, 10, 14, 12, 0, tzinfo=TZ)      # Wednesday noon
+    check("in 35 minutes", rd(35, now=now) == now + timedelta(minutes=35))
+    check("tomorrow 09:00", rd(day="tomorrow", time="09:00", now=now) == datetime(2026, 10, 15, 9, 0, tzinfo=TZ))
+    check("time alone means today", rd(time="21:30", now=now) == datetime(2026, 10, 14, 21, 30, tzinfo=TZ))
+
+    def raises(fn):
+        try:
+            fn()
+            return False
+        except TE:
+            return True
+
+    check("a time already passed today is rejected", raises(lambda: rd(time="11:00", now=now)))
+    check("both forms at once rejected", raises(lambda: rd(10, day="today", time="13:00", now=now)))
+    check("neither form rejected", raises(lambda: rd(now=now)))
+    check("0 minutes rejected", raises(lambda: rd(0, now=now)))
+    check("gibberish time rejected", raises(lambda: rd(time="soonish", now=now)))
+    sat = datetime(2026, 10, 31, 23, 30, tzinfo=TZ)
+    due = rd(day="tomorrow", time="09:00", now=sat)
+    check("across the DST switch: 09:00 EST on Nov 1", due.date() == date(2026, 11, 1)
+          and due.utcoffset() == timedelta(hours=-5) and due.hour == 9)
+    check("status without an end = until cleared", ru(now=now) is None)
+    check("status until a day = end of that day", ru(day="Friday", now=now) == datetime(2026, 10, 16, 23, 59, tzinfo=TZ))
+    check("status until a time today", ru(time="15:00", now=now) == datetime(2026, 10, 14, 15, 0, tzinfo=TZ))
+
+
+async def test_reminder_and_status_tools():
+    print("Scenario: reminder + status tools (who, when, honest errors, cancel rights)")
+    fake.reminders.clear()
+    out = await tools.run_tool("set_reminder", {"text": "laundry", "in_minutes": 35}, member_id=1)
+    check("timer set and the resolved time read back", out.startswith("Reminder #") and "laundry" in out
+          and fake.reminders[0]["member_id"] == 1 and fake.reminders[0]["created_by"] == 1)
+    out = await tools.run_tool("set_reminder", {"text": "charger", "for": "Mo", "day": "tomorrow",
+                                                "time": "09:00"}, member_id=1)
+    check("reminder for a roommate is theirs, set by the speaker",
+          fake.reminders[1]["member_id"] == 2 and fake.reminders[1]["created_by"] == 1 and "for Mo" in out)
+    out = await tools.run_tool("set_reminder", {"text": "x", "for": "Bob", "in_minutes": 5}, member_id=1)
+    check("unknown roommate -> honest error", out.startswith("ERROR") and len(fake.reminders) == 2)
+    out = await tools.run_tool("set_reminder", {"text": "x", "day": "today", "time": "00:00"}, member_id=1)
+    check("a past time -> honest error, nothing saved", out.startswith("ERROR") and len(fake.reminders) == 2)
+    out = await tools.run_tool("list_reminders", {}, member_id=1)
+    check("list shows both with ids and who set Mo's", "#1" in out and "#2" in out and "set by Zain" in out)
+    out = await tools.run_tool("cancel_reminder", {"reminder_id": 1}, member_id=2)
+    check("can't cancel someone else's own reminder", out.startswith("ERROR") and not fake.reminders[0]["done"])
+    out = await tools.run_tool("cancel_reminder", {"reminder_id": 2}, member_id=2)
+    check("can cancel a reminder that's for you", out.startswith("Cancelled") and fake.reminders[1]["done"])
+    out = await tools.run_tool("cancel_reminder", {"reminder_id": 99}, member_id=1)
+    check("fake id -> honest error", out.startswith("ERROR"))
+
+    fake.statuses.clear()
+    out = await tools.run_tool("set_status", {"text": "in a midterm", "until_day": "tomorrow",
+                                              "until_time": "15:00"}, member_id=2)
+    check("status set with its end", out.startswith("Status set") and fake.statuses[2]["until_at"] is not None)
+    brain.client = FakeClient(reply_only("ماشي."))
+    await brain.think(ZAIN, "dm:1", "where's Mo?")
+    sys_blocks = brain.client.messages.requests[0]["system"]
+    check("statuses reach Abdo in the dynamic context", "Mo: in a midterm (until" in sys_blocks[1]["text"])
+    check("…and never in the cached persona", "in a midterm (until" not in sys_blocks[0]["text"])
+    fake.statuses[2]["until_at"] = datetime.now(timezone.utc) - timedelta(minutes=1)
+    brain.client = FakeClient(reply_only("ماشي."))
+    await brain.think(ZAIN, "dm:1", "where's Mo?")
+    check("expired status is ignored",
+          "Statuses right now" not in brain.client.messages.requests[0]["system"][1]["text"])
+    out = await tools.run_tool("clear_status", {}, member_id=2)
+    check("clear status", out == "Status cleared." and 2 not in fake.statuses)
+
+    out = await tools.run_tool("get_prayer_times", {"day": "tomorrow"}, member_id=1)
+    check("prayer times tool answers from code", "Fajr" in out and "Isha" in out and "p.m." in out)
+
+
+def test_prayer_times():
+    print("Scenario: prayer times (order, solar noon, local day, DST, Asr school)")
+    from app import prayer
+    day = date(2026, 10, 12)
+    t = prayer.times_for(day)
+    check("all on the requested local day", all(v.date() == day for v in t.values()))
+    check("ordered fajr < sunrise < dhuhr < asr < maghrib < isha",
+          all(t[a] < t[b] for a, b in zip(prayer.ORDER, prayer.ORDER[1:])))
+    check("dhuhr near solar noon (EDT, ~13:00 at 80°W in October)",
+          datetime(2026, 10, 12, 12, 45, tzinfo=TZ) < t["dhuhr"] < datetime(2026, 10, 12, 13, 30, tzinfo=TZ))
+    dst = prayer.times_for(date(2026, 11, 1))
+    check("DST day works, dhuhr an hour earlier on the clock",
+          dst["dhuhr"].utcoffset() == timedelta(hours=-5) and dst["dhuhr"].hour == 12)
+    real = settings.prayer_asr
+    settings.prayer_asr = "HANAFI"
+    try:
+        check("Hanafi Asr is later than standard", prayer.times_for(day)["asr"] > t["asr"])
+    finally:
+        settings.prayer_asr = real
+    check("12-hour label", prayer.clock12(datetime(2026, 1, 1, 15, 52)) == "3:52 p.m."
+          and prayer.clock12(datetime(2026, 1, 1, 0, 5)) == "12:05 a.m.")
+
+
+async def test_notify_deliver():
+    print("Scenario: delivery = push if it lands, else Telegram (never both); Fajr silent")
+    from app import notify, push
+    real_send, real_tg = push.send_to_member, telegram.send_message
+    tg = []
+
+    async def tg_send(chat_id, text, disable_notification=False):
+        tg.append((chat_id, text, disable_notification))
+
+    telegram.send_message = tg_send
+    try:
+        async def one(*a, **kw):
+            return 1
+        push.send_to_member = one
+        check("push lands -> no Telegram", await notify.deliver(ZAIN, "t", "b") == "push" and tg == [])
+
+        async def zero(*a, **kw):
+            return 0
+        push.send_to_member = zero
+        check("no push device -> Telegram", await notify.deliver(ZAIN, "Fajr", "x", silent=True) == "telegram"
+              and tg == [(111, "Fajr\nx", True)])
+
+        async def boom(*a, **kw):
+            raise RuntimeError("push service down")
+        push.send_to_member = boom
+        tg.clear()
+        check("push error -> Telegram fallback", await notify.deliver(ZAIN, "t", "b") == "telegram" and len(tg) == 1)
+        push.send_to_member = zero
+        check("no push and no Telegram -> 'none'", await notify.deliver(SAM, "t", "b") == "none")
+    finally:
+        push.send_to_member, telegram.send_message = real_send, real_tg
+    check("prefs default on at 08:00", notify.prefs_of(ZAIN) == {"briefing": True, "briefing_time": "08:00", "prayers": True})
+
+
+async def test_scheduler():
+    print("Scenario: scheduler sends each thing exactly once, on time, and never stale")
+    from app import notify, prayer, scheduler, briefing
+    sent = []
+
+    async def deliver(member, title, body, url="/", silent=False):
+        sent.append((member["id"], title, body, silent))
+        return "push"
+
+    async def build(member, now=None):
+        return ("Good morning", "today")
+
+    real_deliver, real_build = notify.deliver, briefing.build
+    notify.deliver, briefing.build = deliver, build
+    for m in MEMBERS.values():
+        m.pop("prefs", None)
+    try:
+        # Reminders: once, even with two overlapping ticks (a zero-downtime deploy).
+        fake.reminders.clear()
+        fake.sent_log.clear()
+        now = datetime(2026, 10, 14, 7, 0, tzinfo=TZ)           # before the briefing
+        await fake.add_reminder(1, "laundry", now - timedelta(minutes=1), 1)
+        await fake.add_reminder(2, "charger", now - timedelta(minutes=1), 1)
+        await fake.add_reminder(1, "old one", now - timedelta(hours=7), 1)
+        await fake.add_reminder(1, "later", now + timedelta(hours=1), 1)
+        await asyncio.gather(scheduler.tick(now), scheduler.tick(now))
+        bodies = sorted(b for _, _, b, _ in sent)
+        check("each due reminder delivered exactly once (two concurrent ticks)",
+              bodies == sorted(["laundry", "From Zain: charger", "(late) old one"]))
+        check("future reminder untouched", not fake.reminders[3]["done"])
+        sent.clear()
+        await scheduler.tick(now)
+        check("nothing resent on the next tick", sent == [])
+
+        # Briefings: after 08:00, before noon, once per member per day, respecting prefs.
+        await scheduler.tick(datetime(2026, 10, 14, 7, 59, tzinfo=TZ))
+        check("no briefing before 08:00", sent == [])
+        MEMBERS[2]["prefs"] = {"briefing": False}
+        MEMBERS[3]["prefs"] = {"briefing_time": "09:30"}
+        await scheduler.tick(datetime(2026, 10, 14, 8, 1, tzinfo=TZ))
+        check("08:01: only members due get it (Mo off, Sam at 09:30)",
+              [m for m, t, _, _ in sent if t == "Good morning"] == [1])
+        await scheduler.tick(datetime(2026, 10, 14, 9, 31, tzinfo=TZ))
+        check("09:31: Sam's custom time; Zain not again",
+              [m for m, t, _, _ in sent if t == "Good morning"] == [1, 3])
+        sent.clear()
+        await scheduler.tick(datetime(2026, 10, 15, 12, 30, tzinfo=TZ))
+        check("missed by noon -> skipped, not sent stale", not any(t == "Good morning" for _, t, _, _ in sent))
+        for m in MEMBERS.values():
+            m.pop("prefs", None)
+
+        # Prayers: inside the 20-minute window, once per member; Fajr silent; prefs respected.
+        fake.sent_log.clear()
+        sent.clear()
+        day = date(2026, 10, 16)
+        times = prayer.times_for(day)
+        MEMBERS[3]["prefs"] = {"prayers": False, "briefing": False}
+        MEMBERS[1]["prefs"] = MEMBERS[2]["prefs"] = {"briefing": False}
+        await scheduler.tick(times["asr"] + timedelta(minutes=5))
+        asr = [(m, s) for m, t, _, s in sent if t.startswith("Asr")]
+        check("Asr sent to members with prayers on, not silent", asr == [(1, False), (2, False)])
+        sent.clear()
+        await scheduler.tick(times["asr"] + timedelta(minutes=6))
+        check("Asr not resent", sent == [])
+        await scheduler.tick(times["maghrib"] + timedelta(minutes=25))
+        check("outside the window -> skipped", sent == [])
+        await scheduler.tick(times["fajr"] + timedelta(minutes=1))
+        fajr = [(m, s) for m, t, _, s in sent if t.startswith("Fajr")]
+        check("Fajr is silent", fajr and all(s for _, s in fajr))
+    finally:
+        notify.deliver, briefing.build = real_deliver, real_build
+        for m in MEMBERS.values():
+            m.pop("prefs", None)
+
+
+async def test_briefing_build():
+    print("Scenario: briefing lines appear only when there's something real to say")
+    from app import briefing
+    real_fetch = briefing._fetch_weather
+    sample = {"current": {"temperature_2m": 3.2, "apparent_temperature": -1.4, "weather_code": 71},
+              "daily": {"temperature_2m_max": [5.4], "temperature_2m_min": [-2.0],
+                        "precipitation_probability_max": [60]}}
+
+    async def good():
+        return sample
+
+    async def bad():
+        raise RuntimeError("open-meteo down")
+
+    global _fake_events
+    now = datetime(2026, 10, 14, 8, 0, tzinfo=TZ)
+    _fake_events = [{"id": "e1", "summary": "Suite dinner", "start": "2026-10-14T19:00:00-04:00"},
+                    {"id": "e2", "summary": "Not today", "start": "2026-10-15T19:00:00-04:00"}]
+    fake.packages = [{"id": 7, "description": "desk lamp", "carrier": None, "owner_id": 1,
+                      "expected_on": None, "status": "arrived"}]
+    fake.shopping = [{"id": 1, "item": "rice", "qty": None, "bought": False}]
+    fake.statuses = {2: {"member_id": 2, "name": "Mo", "text": "away", "until_at": None,
+                         "updated_at": now}}
+    briefing._fetch_weather, briefing._weather_cache = good, None
+    try:
+        title, body = await briefing.build(ZAIN, now)
+        check("greets by Arabic name", title.startswith("صباح الخير يا زين"))
+        check("weather line from real numbers",
+              "Weather: 3°, feels like -1°, light snow. High 5°, low -2°, 60% chance" in body)
+        check("only today's events", "Today: Suite dinner at 19:00" in body and "Not today" not in body)
+        check("my waiting package", "Waiting for you at the building: desk lamp" in body)
+        check("grocery count", "Groceries: 1 item on the list" in body)
+        check("roommates' statuses", "Mo: away" in body)
+        check("remaining prayers", "Prayers: " in body and "Isha" in body)
+
+        briefing._fetch_weather, briefing._weather_cache = bad, None
+        _, body = await briefing.build(ZAIN, now)
+        check("weather failure -> line omitted, not invented", "Weather" not in body)
+
+        real_get = calendar_svc.get_events
+
+        def degraded(days_ahead=7):
+            raise calendar_svc.CalendarReadError("boundary")
+
+        calendar_svc.get_events = degraded
+        try:
+            _, body = await briefing.build(ZAIN, now)
+            check("degraded calendar says so (never 'nothing today')", "Couldn't check the calendar" in body)
+        finally:
+            calendar_svc.get_events = real_get
+    finally:
+        briefing._fetch_weather, briefing._weather_cache = real_fetch, None
+        fake.statuses = {}
+        fake.packages, fake.shopping = [], []
+
+
+def test_web_today():
+    print("Scenario: web Today screen, status, prefs, reminder cancel rights")
+    import re
+    from fastapi.testclient import TestClient
+    from app import main as app_main
+    settings.session_pepper = "test-pepper"
+    dms = []
+
+    async def capture(chat_id, text, disable_notification=False):
+        dms.append(text)
+
+    real_send = telegram.send_message
+    telegram.send_message = capture
+    H = {"X-Abdo": "1"}
+    try:
+        c = TestClient(app_main.app, base_url="https://testserver")
+        c.post("/api/auth/request-code", json={"name": "Zain"}, headers=H)
+        code = re.search(r"\b(\d{6})\b", dms[-1]).group(1)
+        c.post("/api/auth/verify", json={"name": "Zain", "code": code}, headers=H)
+
+        fake.reminders.clear()
+        fake.statuses = {}
+        r1 = asyncio.run(fake.add_reminder(1, "laundry", datetime.now(timezone.utc) + timedelta(hours=1), 1))
+        r2 = asyncio.run(fake.add_reminder(2, "Mo's thing", datetime.now(timezone.utc) + timedelta(hours=1), 2))
+        t = c.get("/api/today").json()
+        check("today: prayers with a next one", t["prayers"] and len(t["prayers"]["times"]) == 6)
+        check("today: only my reminders", [x["text"] for x in t["reminders"]] == ["laundry"])
+
+        r = c.put("/api/status", json={"text": "studying", "until_time": "23:58"}, headers=H)
+        check("set my status", r.status_code == 200 and fake.statuses[1]["text"] == "studying")
+        check("status shows on Today", any(s["name"] == "Zain" for s in c.get("/api/today").json()["statuses"]))
+        r = c.put("/api/status", json={"text": "x", "until_day": "someday"}, headers=H)
+        check("bad status end -> 400", r.status_code == 400)
+        c.delete("/api/status", headers=H)
+        check("clear my status", 1 not in fake.statuses)
+
+        check("cancel someone else's reminder -> 404", c.delete(f"/api/reminders/{r2}", headers=H).status_code == 404)
+        check("cancel mine", c.delete(f"/api/reminders/{r1}", headers=H).status_code == 200)
+
+        check("prefs default", c.get("/api/me/prefs").json()["prefs"]["briefing_time"] == "08:00")
+        r = c.patch("/api/me/prefs", json={"briefing_time": "07:30", "prayers": False}, headers=H)
+        check("prefs update", r.json()["prefs"] == {"briefing": True, "briefing_time": "07:30", "prayers": False})
+        check("invalid time -> 422", c.patch("/api/me/prefs", json={"briefing_time": "25:00"}, headers=H).status_code == 422)
+        check("empty update -> 400", c.patch("/api/me/prefs", json={}, headers=H).status_code == 400)
+    finally:
+        telegram.send_message = real_send
+        settings.session_pepper = None
+        MEMBERS[1].pop("prefs", None)
+
+
 def test_tts_model_routing():
     print("Scenario: digit-bearing replies route to multilingual_v2")
     from app import tts
@@ -1400,6 +1787,12 @@ async def main():
     await test_web_search_offered_and_household_routes_to_recall()
     test_parse_update()
     test_tts_model_routing()
+    test_resolve_due_and_until()
+    await test_reminder_and_status_tools()
+    test_prayer_times()
+    await test_notify_deliver()
+    await test_scheduler()
+    await test_briefing_build()
     print(f"\n{passed} passed, {failed} failed")
 
 
@@ -1409,5 +1802,6 @@ if __name__ == "__main__":
     test_telegram_webhook()
     test_access_log_redaction()
     test_web_app()
+    test_web_today()
     print(f"\nTOTAL: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

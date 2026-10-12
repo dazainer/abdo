@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     vapid_public_key: str | None = None         # web push (scripts/gen_vapid.py)
     vapid_private_key: str | None = None
     vapid_subject: str = "mailto:abdo@example.com"
+    # Proactive Abdo (Phase 7a)
+    scheduler_enabled: bool = True              # the background loop (off in tests/demo)
+    prayer_method: str = "NORTH_AMERICA"        # adhanpy CalculationMethod name (ISNA)
+    prayer_asr: str = "SHAFI"                   # SHAFI (standard) or HANAFI
 
 
 settings = Settings()

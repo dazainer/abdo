@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, ApiError, type Member } from "../api";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, ApiError, type Member, type Prefs } from "../api";
 import { Sign } from "../components/Sign";
 import { disablePush, enablePush, isIOS, isStandalone, pushState, type PushState } from "../lib/push";
 
@@ -57,6 +58,21 @@ export function Settings({ me, onLoggedOut, toast }: {
 
   const canToggle = push === "on" || push === "off";
 
+  const qc = useQueryClient();
+  const prefs = useQuery({ queryKey: ["prefs"], queryFn: api.prefs });
+  async function savePrefs(update: Partial<Prefs>) {
+    // Flip the switch right away; put it back if the server says no.
+    const before = qc.getQueryData<{ prefs: Prefs }>(["prefs"]);
+    if (before) qc.setQueryData(["prefs"], { prefs: { ...before.prefs, ...update } });
+    try {
+      qc.setQueryData(["prefs"], await api.updatePrefs(update));
+    } catch (err) {
+      if (before) qc.setQueryData(["prefs"], before);
+      toast(err instanceof ApiError ? err.message : "Couldn't save that setting.");
+    }
+  }
+  const p = prefs.data?.prefs;
+
   return (
     <div className="page">
       <header className="screen-head"><Sign ar="الإعدادات" en="Settings" /></header>
@@ -87,6 +103,38 @@ export function Settings({ me, onLoggedOut, toast }: {
             )}
           </ul>
         </section>
+
+        {p && (
+          <section className="section" aria-labelledby="abdo-sends">
+            <h2 className="section-title" id="abdo-sends">What Abdo sends you</h2>
+            <p className="section-note">
+              {push === "on" ? "As notifications on this device." : "As Telegram messages, until you turn on notifications."}
+            </p>
+            <ul className="rows">
+              <li className="row">
+                <span className="row-main">
+                  <span className="row-title" id="brief">Morning briefing</span>
+                  <span className="row-meta">Weather, today's plans, packages, groceries, prayer times</span>
+                </span>
+                {p.briefing && (
+                  <input className="field" type="time" value={p.briefing_time} aria-label="Briefing time"
+                         style={{ width: 138, flex: "0 0 138px", minHeight: 38, padding: "4px 10px" }}
+                         onChange={(e) => { if (e.target.value) void savePrefs({ briefing_time: e.target.value }); }} />
+                )}
+                <button className="switch" role="switch" aria-checked={p.briefing} aria-labelledby="brief"
+                        onClick={() => void savePrefs({ briefing: !p.briefing })} />
+              </li>
+              <li className="row">
+                <span className="row-main">
+                  <span className="row-title" id="pray">Prayer times</span>
+                  <span className="row-meta">All five; Fajr arrives silently</span>
+                </span>
+                <button className="switch" role="switch" aria-checked={p.prayers} aria-labelledby="pray"
+                        onClick={() => void savePrefs({ prayers: !p.prayers })} />
+              </li>
+            </ul>
+          </section>
+        )}
 
         {!isStandalone() && (
           <section className="section">

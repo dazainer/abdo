@@ -7,11 +7,14 @@ log = logging.getLogger("abdo")
 API = f"https://api.telegram.org/bot{settings.telegram_bot_token}"
 
 
-async def send_message(chat_id: int, text: str) -> None:
+async def send_message(chat_id: int, text: str, disable_notification: bool = False) -> None:
+    """Plain text (no parse_mode: Arabic + Markdown breaks). disable_notification sends
+    it without a sound (used for Fajr)."""
+    payload = {"chat_id": chat_id, "text": text}
+    if disable_notification:
+        payload["disable_notification"] = True
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"{API}/sendMessage", json={"chat_id": chat_id, "text": text}
-        )
+        resp = await client.post(f"{API}/sendMessage", json=payload)
     # Telegram rejects (HTTP 400) on empty text or bad content and we used to
     # swallow it — the user just saw no reply. Log it loudly instead of failing
     # the webhook (raising here would make Telegram retry and duplicate work).

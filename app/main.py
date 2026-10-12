@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -31,13 +33,14 @@ class RedactWebhookSecret(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(RedactWebhookSecret())
 
-from app import db  # noqa: E402
+from app import db, scheduler  # noqa: E402
+from app.config import settings  # noqa: E402
 from app.channels import telegram as telegram_channel  # noqa: E402
 from app.channels import web as web_channel  # noqa: E402
 
 # Bump this with each deploy-worth change. Surfaced at GET /api/health so we can
 # confirm from outside exactly which code Railway is actually running.
-VERSION = "2026-10-11-webapp"
+VERSION = "2026-10-12-proactive"
 
 # The built React app (web/dist). Absent in a backend-only checkout: then GET /
 # falls back to the health JSON.
@@ -48,7 +51,12 @@ WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 async def lifespan(app: FastAPI):
     log.info("Abdo starting up, version=%s", VERSION)
     await db.init_pool()
+    task = asyncio.create_task(scheduler.run()) if settings.scheduler_enabled else None
     yield
+    if task:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
     await db.close_pool()
 
 

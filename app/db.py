@@ -10,10 +10,17 @@ async def _init_conn(con):
     await register_vector(con)
 
 
+async def _init_conn_json(con):
+    await _init_conn(con)
+    # jsonb <-> dict (members.prefs) instead of raw JSON strings.
+    import json
+    await con.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+
+
 async def init_pool() -> None:
     global _pool
     _pool = await asyncpg.create_pool(
-        settings.database_url, min_size=1, max_size=5, init=_init_conn
+        settings.database_url, min_size=1, max_size=5, init=_init_conn_json
     )
 
 
@@ -174,6 +181,121 @@ async def touch_session(token_hash: str, expires_at) -> None:
 async def delete_session(token_hash: str) -> None:
     async with _pool.acquire() as con:
         await con.execute("DELETE FROM web_sessions WHERE token_hash = $1", token_hash)
+
+
+# --- members (all) + preferences ------------------------------------------------
+
+async def all_members():
+    async with _pool.acquire() as con:
+        return await con.fetch("SELECT * FROM members ORDER BY id")
+
+
+async def set_member_prefs(member_id: int, updates: dict) -> dict:
+    """Merge `updates` into members.prefs and return the result. (The jsonb codec set in
+    _init_conn_json encodes/decodes dicts, so no manual json.dumps here.)"""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "UPDATE members SET prefs = prefs || $2::jsonb WHERE id = $1 RETURNING prefs",
+            member_id, updates,
+        )
+    return dict(row["prefs"])
+
+
+# --- reminders -------------------------------------------------------------------
+
+async def add_reminder(member_id: int, text: str, due_at, created_by) -> int:
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "INSERT INTO reminders (member_id, text, due_at, created_by) "
+            "VALUES ($1, $2, $3, $4) RETURNING id",
+            member_id, text, due_at, created_by,
+        )
+    return row["id"]
+
+
+async def upcoming_reminders(member_id: int | None = None):
+    """Pending reminders (optionally for one member), soonest first."""
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT r.id, r.text, r.due_at, r.member_id, r.created_by, "
+            "       m.name AS member_name, c.name AS created_by_name "
+            "FROM reminders r JOIN members m ON m.id = r.member_id "
+            "LEFT JOIN members c ON c.id = r.created_by "
+            "WHERE NOT r.done AND ($1::int IS NULL OR r.member_id = $1) "
+            "ORDER BY r.due_at",
+            member_id,
+        )
+
+
+async def cancel_reminder(reminder_id: int, member_id: int | None = None):
+    """Cancel a pending reminder. With member_id, only one that is for, or was set by,
+    that member. Returns its text, or None if there's no such pending reminder."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "UPDATE reminders SET done = true WHERE id = $1 AND NOT done "
+            "AND ($2::int IS NULL OR member_id = $2 OR created_by = $2) RETURNING text",
+            reminder_id, member_id,
+        )
+    return row["text"] if row else None
+
+
+async def due_reminder_ids(now) -> list[int]:
+    async with _pool.acquire() as con:
+        rows = await con.fetch(
+            "SELECT id FROM reminders WHERE NOT done AND due_at <= $1 ORDER BY due_at LIMIT 50", now)
+    return [r["id"] for r in rows]
+
+
+async def claim_reminder(reminder_id: int):
+    """Atomically take a due reminder for delivery. Only one caller ever gets the row,
+    so two scheduler instances can't both send it."""
+    async with _pool.acquire() as con:
+        return await con.fetchrow(
+            "UPDATE reminders r SET done = true, sent_at = now() "
+            "FROM members m WHERE r.id = $1 AND NOT r.done AND m.id = r.member_id "
+            "RETURNING r.id, r.text, r.due_at, r.member_id, r.created_by, "
+            "          (SELECT name FROM members WHERE id = r.created_by) AS created_by_name",
+            reminder_id,
+        )
+
+
+async def claim_daily(member_id: int, kind: str, local_date) -> bool:
+    """Claim a once-per-day send (briefing, a prayer). True only for the first caller."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "INSERT INTO sent_log (member_id, kind, local_date) VALUES ($1, $2, $3) "
+            "ON CONFLICT DO NOTHING RETURNING member_id",
+            member_id, kind, local_date,
+        )
+    return row is not None
+
+
+# --- status ----------------------------------------------------------------------
+
+async def set_status(member_id: int, text: str, until_at) -> None:
+    async with _pool.acquire() as con:
+        await con.execute(
+            "INSERT INTO member_status (member_id, text, until_at, updated_at) "
+            "VALUES ($1, $2, $3, now()) "
+            "ON CONFLICT (member_id) DO UPDATE SET text = $2, until_at = $3, updated_at = now()",
+            member_id, text, until_at,
+        )
+
+
+async def clear_status(member_id: int) -> bool:
+    async with _pool.acquire() as con:
+        result = await con.execute("DELETE FROM member_status WHERE member_id = $1", member_id)
+    return not result.endswith(" 0")
+
+
+async def current_statuses():
+    """Unexpired statuses, with names."""
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT s.member_id, m.name, s.text, s.until_at, s.updated_at "
+            "FROM member_status s JOIN members m ON m.id = s.member_id "
+            "WHERE s.until_at IS NULL OR s.until_at > now() ORDER BY m.id"
+        )
 
 
 # --- web push subscriptions ----------------------------------------------------

@@ -25,6 +25,7 @@ async def _no_pool():
 
 db.init_pool = db.close_pool = _no_pool   # never open a real database connection
 settings.session_pepper = "demo-pepper"
+settings.scheduler_enabled = False   # no background sends in demo mode
 settings.cookie_secure = False      # plain http on localhost
 
 
@@ -73,6 +74,19 @@ smoke._fake_events[:] = [
     {"id": "e2", "summary": "Midterm (Mo)", "start": (today + timedelta(days=2)).isoformat()},
     {"id": "e3", "summary": "Groceries run", "start": f"{(today + timedelta(days=3)).isoformat()}T11:00:00-04:00"},
 ]
+
+smoke.fake.statuses = {
+    2: {"member_id": 2, "name": "Mo", "text": "in a midterm", "updated_at": now,
+        "until_at": now + timedelta(hours=2)},
+    3: {"member_id": 3, "name": "Sam", "text": "away till Sunday", "updated_at": now, "until_at": None},
+}
+smoke.fake.reminders = [
+    {"id": 1, "member_id": 1, "text": "switch the laundry", "due_at": now + timedelta(minutes=35),
+     "created_by": 1, "done": False},
+    {"id": 2, "member_id": 1, "text": "bring the HDMI cable", "due_at": now + timedelta(days=1, hours=2),
+     "created_by": 2, "done": False},
+]
+smoke.fake._rem_seq = 2
 
 if __name__ == "__main__":
     import uvicorn

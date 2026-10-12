@@ -49,6 +49,40 @@ export interface CalendarEvent {
   time: string | null; // "19:00", or null for all-day
 }
 
+export interface Status {
+  member_id: number;
+  name: string;
+  text: string;
+  until: string | null;
+}
+
+export interface PrayerTime {
+  name: string;
+  ar: string;
+  en: string;
+  at: string;
+  label: string; // "3:52 p.m."
+}
+
+export interface Reminder {
+  id: number;
+  text: string;
+  due_at: string;
+  set_by: string | null;
+}
+
+export interface Today {
+  statuses: Status[];
+  prayers: { next: string | null; times: PrayerTime[] } | null;
+  reminders: Reminder[];
+}
+
+export interface Prefs {
+  briefing: boolean;
+  briefing_time: string;
+  prayers: boolean;
+}
+
 export interface VoiceReply {
   transcript: string;
   reply: string;
@@ -125,6 +159,14 @@ export const api = {
 
   calendar: (days = 7) =>
     request<{ configured: boolean; events: CalendarEvent[] }>("GET", `/api/calendar?days=${days}`),
+
+  today: () => request<Today>("GET", "/api/today"),
+  setStatus: (text: string, until_time?: string) =>
+    request<{ ok: true }>("PUT", "/api/status", { text, until_time }),
+  clearStatus: () => request<{ ok: true }>("DELETE", "/api/status"),
+  cancelReminder: (id: number) => request<{ ok: true }>("DELETE", `/api/reminders/${id}`),
+  prefs: () => request<{ prefs: Prefs }>("GET", "/api/me/prefs"),
+  updatePrefs: (p: Partial<Prefs>) => request<{ prefs: Prefs }>("PATCH", "/api/me/prefs", p),
 
   pushKey: () => request<{ key: string | null }>("GET", "/api/push/public-key"),
   pushSubscribe: (sub: PushSubscriptionJSON) => request<{ ok: true }>("POST", "/api/push/subscribe", sub),

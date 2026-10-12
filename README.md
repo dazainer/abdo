@@ -3,7 +3,8 @@
 A conversational household assistant that speaks **Egyptian Arabic mixed with English**,
 knows everyone in the household, and does real things for them: remembers household facts,
 manages a shared Google Calendar, tracks packages and the shopping list, knows who's home,
-searches the web, and talks back in a Cairene voice.
+searches the web, and talks back in a Cairene voice. It also speaks first: reminders and timers
+set by voice, a morning briefing, and prayer-time notifications.
 
 It started as an assistant for my family in Cairo and now runs a four-person student suite
 in Waterloo. It lives in Telegram (text and voice notes) and in its own installable web app
@@ -64,6 +65,11 @@ keeps spoken replies short.
 - **Arabic and English in the same sentence.** Every bubble and list row lays out each line
   in its own direction (`unicode-bidi: plaintext`), and the interface is designed around a
   Cairo enamel street sign: bilingual plates, Alexandria and IBM Plex Sans Arabic.
+- **A scheduler that can't double-send.** Reminders, briefings, and prayer notifications run
+  from a small in-process loop with all state in Postgres. Every send is claimed atomically in
+  the database first (`UPDATE … WHERE NOT done RETURNING`, `INSERT … ON CONFLICT DO NOTHING`), so
+  the two instances that briefly overlap during a zero-downtime deploy never both deliver.
+  Stale sends are skipped by design (no hour-old adhan after a restart).
 - **Speaker-aware memory.** Conversations are keyed by thread (a DM, a group chat, later the
   shared room), and each logged turn records its channel, modality and speaker. Abdo can follow
   a group conversation and knows who asked what.

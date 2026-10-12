@@ -53,7 +53,7 @@ log redaction. Room-device mute control moves to Phase 8.
 ### Phase 7: Proactive Abdo + student-life features, outline
 Split in two so each half ships on its own.
 
-**7a: Scheduler, briefing, prayers, timers**
+**7a: Scheduler, briefing, prayers, timers** → `docs/abdo_phase7a_proactive_spec.md`
 - In-process scheduler (rebuilt from the DB at startup; Railway runs one instance).
   This finally wires up the `reminders` table.
 - **Daily briefing** per roommate at their chosen time: today's classes, shared calendar,

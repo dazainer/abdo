@@ -431,6 +431,32 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .cal-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; justify-content: center; }
 .cal-time { color: var(--text-soft); font-variant-numeric: tabular-nums; margin-inline-end: 8px; }
 
+/* ---- prayer times: a small enamel timetable, the next prayer lit in gold ---------- */
+
+.prayers {
+  list-style: none; margin: 4px 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+}
+.prayer {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 10px 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  line-height: 1.25;
+}
+.prayer-ar { font-family: var(--font-sign); font-weight: 700; font-size: var(--t-lead); line-height: 1.5; }
+.prayer-en { font-size: var(--t-small); color: var(--text-soft); }
+.prayer-time { font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.prayer.sunrise { opacity: 0.7; }
+.prayer.next {
+  background: var(--plate);
+  color: var(--plate-text);
+  border-color: var(--plate);
+  box-shadow: inset 0 0 0 3px var(--plate), inset 0 0 0 4.5px var(--gold);
+}
+.prayer.next .prayer-en { color: inherit; opacity: 0.85; }
+
 /* ---- settings ---------------------------------------------------------------- */
 
 .switch {

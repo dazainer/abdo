@@ -1,9 +1,10 @@
 import logging
+from zoneinfo import ZoneInfo
 
 from anthropic import AsyncAnthropic
 from app.config import settings
 from app.tools import TOOLS, run_tool
-from app.prompts import build_system_prompt
+from app.prompts import build_system_prompt, statuses_line
 from app import db
 
 log = logging.getLogger("abdo")
@@ -85,7 +86,9 @@ async def think(member, thread: str, user_text: str, *, channel: str = "telegram
     # Built once per turn and never changed between tool rounds: thinking blocks are
     # only valid while everything sent before them is unchanged.
     system = build_system_prompt(member_name=name, roster=await db.roster_string(),
-                                 channel=channel, voice=voice)
+                                 channel=channel, voice=voice,
+                                 statuses=statuses_line(await db.current_statuses(),
+                                                        ZoneInfo(settings.timezone)))
 
     # Tool loop: Claude may call a tool; we run it and feed the result back.
     for _ in range(MAX_TOOL_ROUNDS):

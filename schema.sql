@@ -112,13 +112,35 @@ CREATE TABLE push_subscriptions (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Reminders / nudges (wired up in Phase 7).
+-- ---------- Proactive Abdo (Phase 7a; live DBs get these via migrations/phase7a_proactive.sql) ----------
+
+-- Reminders / timers. The scheduler claims a due row (done = true) before delivering it.
 CREATE TABLE reminders (
     id          BIGSERIAL PRIMARY KEY,
-    member_id   INTEGER REFERENCES members(id),
+    member_id   INTEGER REFERENCES members(id),  -- who gets reminded
     text        TEXT NOT NULL,
     due_at      TIMESTAMPTZ NOT NULL,
-    recurring   TEXT,                           -- cron-ish, or NULL for one-shot
+    recurring   TEXT,                            -- reserved (7a reminders are one-shot)
     done        BOOLEAN NOT NULL DEFAULT false,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by  INTEGER REFERENCES members(id),  -- who asked for it
+    sent_at     TIMESTAMPTZ
+);
+CREATE INDEX idx_reminders_due ON reminders (due_at) WHERE NOT done;
+
+-- One current status per member ("in a midterm", "away in Toronto"), optionally expiring.
+CREATE TABLE member_status (
+    member_id   INTEGER PRIMARY KEY REFERENCES members(id),
+    text        TEXT NOT NULL,
+    until_at    TIMESTAMPTZ,                     -- NULL = until cleared
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Daily sends (briefing, each prayer) are claimed here first: one per member per local day.
+CREATE TABLE sent_log (
+    member_id   INTEGER NOT NULL REFERENCES members(id),
+    kind        TEXT NOT NULL,                   -- 'briefing' | 'prayer:<name>'
+    local_date  DATE NOT NULL,
+    sent_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (member_id, kind, local_date)
 );

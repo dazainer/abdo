@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app import db, embeddings, calendar_svc, geo
@@ -241,6 +241,82 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "set_reminder",
+        "description": (
+            "Set a reminder or timer that Abdo sends later as a notification. Use for 'remind me "
+            "in 35 minutes', 'timer 10 min', 'remind Sam tomorrow at 9 about the charger'. Pass "
+            "EITHER in_minutes, OR a time (HH:MM, 24h) with an optional day exactly as said — never "
+            "a computed date. Confirm the resolved time from the result once."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "What to remind about, short, in the speaker's words."},
+                "for": {"type": "string", "description": "A roommate's name if it's for someone else. Omit for the speaker."},
+                "in_minutes": {"type": "integer", "description": "For timers: minutes from now."},
+                "day": {"type": "string", "description": "The day as said ('today', 'tomorrow', 'Friday', 'next Monday') or an exact date from the reference. Default today."},
+                "time": {"type": "string", "description": "Local time, HH:MM 24h, e.g. '21:00'."},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "list_reminders",
+        "description": "List upcoming reminders (with ids), for everyone or one roommate.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"for": {"type": "string", "description": "Only this roommate's reminders (optional)."}},
+            "required": [],
+        },
+    },
+    {
+        "name": "cancel_reminder",
+        "description": "Cancel a reminder by its id from list_reminders. Never guess an id.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"reminder_id": {"type": "integer"}},
+            "required": ["reminder_id"],
+        },
+    },
+    {
+        "name": "set_status",
+        "description": (
+            "Set the speaker's status so the suite knows, e.g. 'in a midterm', 'studying, quiet "
+            "please', 'away in Toronto'. Optional end: until_day and/or until_time (HH:MM) as said."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The status, short."},
+                "until_day": {"type": "string", "description": "When it ends, the day as said (optional)."},
+                "until_time": {"type": "string", "description": "When it ends, HH:MM 24h (optional)."},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "clear_status",
+        "description": "Clear the speaker's status (they're back / done).",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_prayer_times",
+        "description": "Prayer times for a day (default today), computed for the suite's location.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"day": {"type": "string", "description": "The day as said (optional, default today)."}},
+            "required": [],
+        },
+    },
+    {
+        "name": "get_briefing",
+        "description": (
+            "The speaker's daily briefing: weather, today's calendar, their packages, groceries, "
+            "roommates' statuses, and remaining prayer times. Use for 'what's my day look like?'."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "add_package",
         "description": (
             "Record an incoming package/delivery for someone in the suite, so everyone knows "
@@ -301,6 +377,64 @@ async def read_calendar(days_ahead: int):
     except calendar_svc.CalendarReadError:
         log.warning("calendar read failed; retrying once")
         return await asyncio.to_thread(calendar_svc.get_events, days_ahead)
+
+
+# --- time resolution for reminders and statuses (shared with the web API) ----------
+# Same rule as the calendar: the model passes what the person said ("in 35 minutes",
+# "tomorrow" + "09:00"); the real local datetime is computed here, never by the model.
+
+class TimeError_(ValueError):
+    """A spoken time we can't turn into a real, future moment. The message is safe to show."""
+
+
+def resolve_due(in_minutes=None, day: str | None = None, time: str | None = None,
+                now: datetime | None = None) -> datetime:
+    tz = ZoneInfo(settings.timezone)
+    now = now or datetime.now(tz)
+    if in_minutes is not None and (day or time):
+        raise TimeError_("give either a number of minutes or a day/time, not both")
+    if in_minutes is not None:
+        try:
+            minutes = int(in_minutes)
+        except (TypeError, ValueError):
+            raise TimeError_(f"'{in_minutes}' isn't a number of minutes")
+        if not 0 < minutes <= 7 * 24 * 60:
+            raise TimeError_("a timer has to be between 1 minute and 7 days")
+        return now + timedelta(minutes=minutes)
+    if not time:
+        raise TimeError_("I need either 'in N minutes' or a time (HH:MM)")
+    try:
+        d = calendar_svc.resolve_date(day or "today", now=now)
+        h, m = calendar_svc._parse_time(time)
+        due = datetime(d.year, d.month, d.day, h, m, tzinfo=tz)
+    except (ValueError, IndexError):
+        raise TimeError_(f"couldn't understand '{day or 'today'} {time}'")
+    if due <= now:
+        raise TimeError_(f"{due.strftime('%A %H:%M')} has already passed; ask if they mean a later day")
+    return due
+
+
+def resolve_until(day: str | None = None, time: str | None = None,
+                  now: datetime | None = None) -> datetime | None:
+    """When a status ends: None = until cleared; a day alone = the end of that day."""
+    if not day and not time:
+        return None
+    tz = ZoneInfo(settings.timezone)
+    now = now or datetime.now(tz)
+    if time:
+        return resolve_due(day=day, time=time, now=now)
+    try:
+        d = calendar_svc.resolve_date(day, now=now)
+    except ValueError:
+        raise TimeError_(f"couldn't understand the day '{day}'")
+    until = datetime(d.year, d.month, d.day, 23, 59, tzinfo=tz)
+    if until <= now:
+        raise TimeError_("that day has already passed")
+    return until
+
+
+def _when(dt: datetime) -> str:
+    return dt.astimezone(ZoneInfo(settings.timezone)).strftime("%A %d %B at %H:%M")
 
 
 def _package_line(r) -> str:
@@ -492,5 +626,79 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
             return (f"ERROR: no open package #{tool_input['package_id']}. Do NOT claim it "
                     f"changed; call get_packages to see the real ids.")
         return f"Package #{tool_input['package_id']} ({desc}) is now {status.replace('_', ' ')}."
+
+    if name == "set_reminder":
+        text = (tool_input.get("text") or "").strip()
+        if not text:
+            return "ERROR: what should the reminder say? Ask the user."
+        target_id, target = member_id, "the speaker"
+        if tool_input.get("for"):
+            target_id = await db.get_member_id_by_name(tool_input["for"])
+            if target_id is None:
+                return (f"ERROR: nobody in the suite is called '{tool_input['for']}'. Ask who it's "
+                        f"for; do NOT set it under a guessed name.")
+            target = tool_input["for"]
+        if target_id is None:
+            return "ERROR: couldn't tell who this reminder is for. Ask the user."
+        try:
+            due = resolve_due(tool_input.get("in_minutes"), tool_input.get("day"), tool_input.get("time"))
+        except TimeError_ as e:
+            return f"ERROR: {e}. Ask the user; do NOT guess a time."
+        rid = await db.add_reminder(target_id, text, due, member_id)
+        return f"Reminder #{rid} set for {target}: '{text}', {_when(due)} (local time)."
+
+    if name == "list_reminders":
+        who = None
+        if tool_input.get("for"):
+            who = await db.get_member_id_by_name(tool_input["for"])
+            if who is None:
+                return f"ERROR: nobody in the suite is called '{tool_input['for']}'."
+        rows = await db.upcoming_reminders(who)
+        if not rows:
+            return "No upcoming reminders."
+        return "\n".join(
+            f"- #{r['id']} for {r['member_name']}: '{r['text']}', {_when(r['due_at'])}"
+            + (f" (set by {r['created_by_name']})" if r["created_by_name"] and r["created_by"] != r["member_id"] else "")
+            for r in rows)
+
+    if name == "cancel_reminder":
+        text = await db.cancel_reminder(tool_input["reminder_id"], member_id)
+        if text is None:
+            return (f"ERROR: no pending reminder #{tool_input['reminder_id']} for or by this person. "
+                    f"Do NOT claim it was cancelled; call list_reminders for real ids.")
+        return f"Cancelled reminder #{tool_input['reminder_id']} ('{text}')."
+
+    if name == "set_status":
+        if member_id is None:
+            return "ERROR: couldn't tell whose status this is. Ask the user."
+        try:
+            until = resolve_until(tool_input.get("until_day"), tool_input.get("until_time"))
+        except TimeError_ as e:
+            return f"ERROR: {e}. Ask the user."
+        await db.set_status(member_id, tool_input["text"].strip(), until)
+        return f"Status set: '{tool_input['text'].strip()}'" + (f" until {_when(until)}." if until else " (until cleared).")
+
+    if name == "clear_status":
+        if member_id is None:
+            return "ERROR: couldn't tell whose status this is."
+        return "Status cleared." if await db.clear_status(member_id) else "There was no status to clear."
+
+    if name == "get_prayer_times":
+        from app import prayer
+        if not prayer.is_configured():
+            return "Prayer times aren't set up (the home location is missing)."
+        try:
+            day = calendar_svc.resolve_date(tool_input.get("day") or "today")
+        except ValueError:
+            return f"ERROR: couldn't understand the day '{tool_input.get('day')}'. Ask which day."
+        return f"Prayer times for {day.strftime('%A %d %B')}:\n{prayer.describe_day(day)}"
+
+    if name == "get_briefing":
+        from app import briefing   # imported here: briefing imports this module
+        member = await db.get_member(member_id) if member_id else None
+        if member is None:
+            return "ERROR: couldn't tell who's asking."
+        title, body = await briefing.build(member)
+        return f"{title}\n{body}"
 
     return f"Unknown tool: {name}"

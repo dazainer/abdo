@@ -14,14 +14,15 @@ not enabled), so it doubles as CSRF protection alongside SameSite=Lax.
 """
 import base64
 import logging
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from app import auth, calendar_svc, db, push, stt, tts, turn
+from app import auth, calendar_svc, db, notify, prayer, push, stt, tts, turn
 from app.config import settings
-from app.tools import event_when, read_calendar
+from app.tools import TimeError_, event_when, read_calendar, resolve_until
 
 log = logging.getLogger("abdo")
 router = APIRouter(prefix="/api")
@@ -254,6 +255,79 @@ async def calendar(days: int = Query(default=7, ge=1, le=31), member=Depends(cur
         raise HTTPException(503, "couldn't reach the calendar, try again in a moment")
     return {"configured": True,
             "events": [{"id": e["id"], "summary": e["summary"], **event_when(e)} for e in events]}
+
+
+# --- today: statuses, prayer times, my reminders -----------------------------------
+
+class StatusIn(BaseModel):
+    text: str = Field(min_length=1, max_length=80)
+    until_day: str | None = Field(default=None, max_length=40)
+    until_time: str | None = Field(default=None, max_length=10)
+
+
+class PrefsIn(BaseModel):
+    briefing: bool | None = None
+    briefing_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    prayers: bool | None = None
+
+
+@router.get("/today")
+async def today(member=Depends(current_member)):
+    tz = ZoneInfo(settings.timezone)
+    now = datetime.now(tz)
+    statuses = [{"member_id": s["member_id"], "name": s["name"], "text": s["text"],
+                 "until": s["until_at"].isoformat() if s["until_at"] else None}
+                for s in await db.current_statuses()]
+    prayers = None
+    if prayer.is_configured():
+        times = prayer.times_for(now.date())
+        upcoming = [n for n in prayer.PRAYERS if times[n] > now]
+        prayers = {"next": upcoming[0] if upcoming else None,
+                   "times": [{"name": n, "ar": prayer.NAMES[n][0], "en": prayer.NAMES[n][1],
+                              "at": times[n].isoformat(), "label": prayer.clock12(times[n])}
+                             for n in prayer.ORDER]}
+    reminders = [{"id": r["id"], "text": r["text"], "due_at": r["due_at"].isoformat(),
+                  "set_by": r["created_by_name"] if r["created_by"] not in (None, member["id"]) else None}
+                 for r in await db.upcoming_reminders(member["id"])]
+    return {"statuses": statuses, "prayers": prayers, "reminders": reminders}
+
+
+@router.put("/status", dependencies=[Depends(same_origin)])
+async def set_status(body: StatusIn, member=Depends(current_member)):
+    try:
+        until = resolve_until(body.until_day, body.until_time)
+    except TimeError_ as e:
+        raise HTTPException(400, str(e))
+    await db.set_status(member["id"], body.text.strip(), until)
+    return {"ok": True}
+
+
+@router.delete("/status", dependencies=[Depends(same_origin)])
+async def clear_status(member=Depends(current_member)):
+    await db.clear_status(member["id"])
+    return {"ok": True}
+
+
+@router.delete("/reminders/{reminder_id}", dependencies=[Depends(same_origin)])
+async def cancel_reminder(reminder_id: int, member=Depends(current_member)):
+    # Only a reminder that's for you, or one you set, can be cancelled.
+    if await db.cancel_reminder(reminder_id, member["id"]) is None:
+        raise HTTPException(404, f"no pending reminder #{reminder_id} of yours")
+    return {"ok": True}
+
+
+@router.get("/me/prefs")
+async def get_prefs(member=Depends(current_member)):
+    return {"prefs": notify.prefs_of(member)}
+
+
+@router.patch("/me/prefs", dependencies=[Depends(same_origin)])
+async def update_prefs(body: PrefsIn, member=Depends(current_member)):
+    updates = body.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(400, "nothing to change")
+    saved = await db.set_member_prefs(member["id"], updates)
+    return {"prefs": {**notify.PREF_DEFAULTS, **saved}}
 
 
 # --- push ------------------------------------------------------------------------

@@ -48,7 +48,8 @@ Claude.
 ## Project layout
 
 ```
-app/  → main.py (app setup, GET /api/health version, serves web/dist as an SPA),
+app/  → main.py (app setup, GET /api/health version, serves web/dist as an SPA, starts the
+        scheduler), scheduler.py + notify.py + briefing.py + prayer.py (proactive Abdo),
         channels/telegram.py (webhook adapter), channels/web.py (/api for the web app),
         auth.py (Telegram-code login + sessions), push.py (web push), turn.py
         (handle_turn), brain.py (tool loop), prompts.py (static persona + dynamic context),
@@ -139,6 +140,19 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   direction. In lists, also pin `text-align: left`, or Arabic rows flush right. Chat bubbles
   keep `dir="auto"` alignment on purpose. A trailing "?" landing on the left in Arabic-first
   lines is correct bidi behaviour, not a bug.
+- **Proactive sends (`scheduler.py`) are claimed in the DB before delivery**: a reminder row is
+  flipped to `done` with `UPDATE … WHERE NOT done RETURNING`, daily sends insert into
+  `sent_log` (`ON CONFLICT DO NOTHING RETURNING`). Railway's zero-downtime deploys briefly run
+  two instances, so never deliver without claiming first. Prayers send only within 20 min of
+  their time; a briefing missed by noon is skipped (never send stale). Everything goes through
+  `notify.deliver()`: push if it lands, else Telegram, never both. Fajr is silent.
+- **Prayer times are computed locally** (`prayer.py`, adhanpy, ISNA + standard Asr via
+  `PRAYER_METHOD` / `PRAYER_ASR`). Always pass the **local calendar date**: adhanpy reads the
+  day from a UTC timestamp, so a Toronto evening would give tomorrow's times.
+- **Reminder/status times are resolved in code** (`tools.resolve_due` / `resolve_until`,
+  shared by the tools and the web API), exactly like calendar dates.
+- **Tests never read the real `.env`**: `tests/smoke.py` chdirs into `tests/` first. Keep it,
+  or real keys/push config leak into the suite.
 - **Webhook secret never in logs**: `main.RedactWebhookSecret` rewrites `/tg/<secret>` in
   uvicorn's access log. Keep it if logging changes.
 - **Service workers don't run in the desktop app's built-in preview browser**. Test the
@@ -175,7 +189,8 @@ The full plan, decisions log, and later-phase outlines are in `docs/ROADMAP.md`.
   `America/Toronto`, persona rewrite, brain/channel separation (`handle_turn`), speaker-aware
   logs, Haiku 5.5 + prompt caching, packages, new Telegram bot, public-repo hygiene.
   Watch item: occasional MSA sentences since the move. Note the triggering message if it recurs.
-- **Phase 6 (current: built, awaiting deploy + phone checks)** → `docs/abdo_phase6_webapp_spec.md`:
-  web app (React PWA), Telegram-code login, shared DM thread, push infrastructure, Dockerfile. **Phase 7** → scheduler, daily briefing, prayer times, timers,
-  status, expenses, timetables, deadlines, groceries, polls, buses. **Phase 8** → always-on room
+- **Phase 6 (done, deployed 2026-10-11)** → `docs/abdo_phase6_webapp_spec.md`: web app (React
+  PWA), Telegram-code login, shared DM thread, push infrastructure, Dockerfile.
+- **Phase 7a (current: built, awaiting deploy)** → `docs/abdo_phase7a_proactive_spec.md`:
+  scheduler, reminders/timers, morning briefing, prayer-time notifications, statuses, Today tab. **Phase 7b** → expenses, timetables, deadlines, groceries+, polls, buses. **Phase 8** → always-on room
   device (wake word, speaker ID; prove on a Mac before buying hardware). Specs written when each starts.
