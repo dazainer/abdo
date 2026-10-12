@@ -29,6 +29,11 @@ async def get_member_by_telegram_id(tg_id: int):
         return await con.fetchrow("SELECT * FROM members WHERE telegram_id = $1", tg_id)
 
 
+async def get_member(member_id: int):
+    async with _pool.acquire() as con:
+        return await con.fetchrow("SELECT * FROM members WHERE id = $1", member_id)
+
+
 async def roster_string() -> str:
     """Everyone in the suite, for the prompt: 'Sam (Sam Example, سام), ...'."""
     async with _pool.acquire() as con:
@@ -80,6 +85,120 @@ async def recent_messages(thread: str, limit: int = 10):
             thread, limit,
         )
     return list(reversed(rows))  # back to chronological order
+
+
+async def thread_page(thread: str, before_id: int | None = None, limit: int = 30):
+    """One page of a thread for the web app, newest first (the caller reverses).
+    `before_id` pages backwards through older messages."""
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT m.id, m.role, m.content, m.channel, m.modality, m.created_at, "
+            "       mem.name AS speaker "
+            "FROM messages m LEFT JOIN members mem ON mem.id = m.member_id "
+            "WHERE m.thread = $1 AND ($2::bigint IS NULL OR m.id < $2) "
+            "ORDER BY m.id DESC LIMIT $3",
+            thread, before_id, limit,
+        )
+
+
+# --- web login + sessions ------------------------------------------------------
+
+async def create_login_code(member_id: int, code_hash: str, expires_at) -> None:
+    async with _pool.acquire() as con:
+        await con.execute(
+            "INSERT INTO login_codes (member_id, code_hash, expires_at) VALUES ($1, $2, $3)",
+            member_id, code_hash, expires_at,
+        )
+
+
+async def count_recent_login_codes(member_id: int, since) -> int:
+    async with _pool.acquire() as con:
+        return await con.fetchval(
+            "SELECT count(*) FROM login_codes WHERE member_id = $1 AND created_at >= $2",
+            member_id, since,
+        )
+
+
+async def latest_live_login_code(member_id: int):
+    """The newest unused, unexpired code for a member (older ones are superseded)."""
+    async with _pool.acquire() as con:
+        return await con.fetchrow(
+            "SELECT id, code_hash, attempts FROM login_codes "
+            "WHERE member_id = $1 AND NOT used AND expires_at > now() "
+            "ORDER BY created_at DESC LIMIT 1",
+            member_id,
+        )
+
+
+async def bump_login_code_attempts(code_id: int) -> None:
+    async with _pool.acquire() as con:
+        await con.execute("UPDATE login_codes SET attempts = attempts + 1 WHERE id = $1", code_id)
+
+
+async def use_login_code(code_id: int) -> bool:
+    """Mark a code used. False if it was already used (a double submit)."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "UPDATE login_codes SET used = true WHERE id = $1 AND NOT used RETURNING id", code_id)
+    return row is not None
+
+
+async def create_session(token_hash: str, member_id: int, user_agent: str | None, expires_at) -> None:
+    async with _pool.acquire() as con:
+        await con.execute(
+            "INSERT INTO web_sessions (token_hash, member_id, user_agent, expires_at) "
+            "VALUES ($1, $2, $3, $4)",
+            token_hash, member_id, user_agent, expires_at,
+        )
+
+
+async def session_member(token_hash: str):
+    """The member behind a live session (+ session timestamps), or None."""
+    async with _pool.acquire() as con:
+        return await con.fetchrow(
+            "SELECT m.*, s.last_seen_at AS session_last_seen "
+            "FROM web_sessions s JOIN members m ON m.id = s.member_id "
+            "WHERE s.token_hash = $1 AND s.expires_at > now()",
+            token_hash,
+        )
+
+
+async def touch_session(token_hash: str, expires_at) -> None:
+    async with _pool.acquire() as con:
+        await con.execute(
+            "UPDATE web_sessions SET last_seen_at = now(), expires_at = $2 WHERE token_hash = $1",
+            token_hash, expires_at,
+        )
+
+
+async def delete_session(token_hash: str) -> None:
+    async with _pool.acquire() as con:
+        await con.execute("DELETE FROM web_sessions WHERE token_hash = $1", token_hash)
+
+
+# --- web push subscriptions ----------------------------------------------------
+
+async def save_push_subscription(member_id: int, endpoint: str, p256dh: str, auth: str) -> None:
+    async with _pool.acquire() as con:
+        await con.execute(
+            "INSERT INTO push_subscriptions (member_id, endpoint, p256dh, auth) "
+            "VALUES ($1, $2, $3, $4) "
+            "ON CONFLICT (endpoint) DO UPDATE SET member_id = $1, p256dh = $3, auth = $4",
+            member_id, endpoint, p256dh, auth,
+        )
+
+
+async def delete_push_subscription(endpoint: str) -> None:
+    async with _pool.acquire() as con:
+        await con.execute("DELETE FROM push_subscriptions WHERE endpoint = $1", endpoint)
+
+
+async def push_subscriptions_for(member_id: int):
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE member_id = $1",
+            member_id,
+        )
 
 
 # --- household knowledge base --------------------------------------------------
@@ -179,7 +298,7 @@ async def add_shopping_item(item, qty, member_id) -> bool:
 async def get_shopping_list():
     async with _pool.acquire() as con:
         return await con.fetch(
-            "SELECT item, qty FROM shopping_items WHERE NOT bought ORDER BY created_at"
+            "SELECT id, item, qty FROM shopping_items WHERE NOT bought ORDER BY created_at"
         )
 
 

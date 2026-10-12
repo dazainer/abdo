@@ -78,6 +78,40 @@ CREATE TABLE packages (
 );
 CREATE INDEX idx_packages_open ON packages (status) WHERE status IN ('expected', 'arrived');
 
+-- ---------- Web app (Phase 6; live DBs get these via migrations/phase6_webapp.sql) ----------
+
+-- One-time login codes, delivered by Telegram DM. Only the hash is stored.
+CREATE TABLE login_codes (
+    id          BIGSERIAL PRIMARY KEY,
+    member_id   INTEGER NOT NULL REFERENCES members(id),
+    code_hash   TEXT NOT NULL,
+    expires_at  TIMESTAMPTZ NOT NULL,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    used        BOOLEAN NOT NULL DEFAULT false,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_login_codes_member ON login_codes (member_id, created_at DESC);
+
+-- Web sessions (cookie holds a random token; only its hash is stored).
+CREATE TABLE web_sessions (
+    token_hash    TEXT PRIMARY KEY,
+    member_id     INTEGER NOT NULL REFERENCES members(id),
+    user_agent    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at    TIMESTAMPTZ NOT NULL
+);
+
+-- Web push subscriptions (one per installed app / browser).
+CREATE TABLE push_subscriptions (
+    id          BIGSERIAL PRIMARY KEY,
+    member_id   INTEGER NOT NULL REFERENCES members(id),
+    endpoint    TEXT NOT NULL UNIQUE,
+    p256dh      TEXT NOT NULL,
+    auth        TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Reminders / nudges (wired up in Phase 7).
 CREATE TABLE reminders (
     id          BIGSERIAL PRIMARY KEY,

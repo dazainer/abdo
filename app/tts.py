@@ -35,7 +35,14 @@ def _pick_model(text: str) -> str:
 
 
 async def synthesize(text: str) -> bytes:
-    """Egyptian Arabic text -> OGG/Opus bytes ready for sendVoice."""
+    """Egyptian Arabic text -> OGG/Opus bytes ready for Telegram's sendVoice."""
+    mp3 = await synthesize_mp3(text)
+    # ffmpeg is blocking; keep it off the event loop.
+    return await asyncio.to_thread(_mp3_to_ogg, mp3)
+
+
+async def synthesize_mp3(text: str) -> bytes:
+    """Egyptian Arabic text -> MP3 bytes (browsers play MP3 natively; no transcode)."""
     model = _pick_model(text)
     async with httpx.AsyncClient(timeout=60) as client:
         r = await client.post(
@@ -48,9 +55,7 @@ async def synthesize(text: str) -> bytes:
             json={"text": text, "model_id": model, "voice_settings": _VOICE_SETTINGS},
         )
         r.raise_for_status()
-        mp3 = r.content
-    # ffmpeg is blocking; keep it off the event loop.
-    return await asyncio.to_thread(_mp3_to_ogg, mp3)
+        return r.content
 
 
 def _mp3_to_ogg(mp3: bytes) -> bytes:

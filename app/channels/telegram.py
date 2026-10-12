@@ -19,9 +19,13 @@ DIDNT_HEAR = "معلش، مسمعتش كويس — ممكن تعيد؟"
 TOO_LONG_VOICE = "الرسالة الصوتية طويلة شوية — ممكن تبعتها أقصر؟"
 
 
-def thread_for(chat_id: int) -> str:
-    """One conversation per Telegram chat (a DM, or the suite's group chat)."""
-    return f"tg:{chat_id}"
+def thread_for(parsed: dict, member) -> str:
+    """A private chat is the member's personal thread, shared with the web app
+    (dm:<member_id>), so Abdo remembers across devices. A group chat is its own
+    shared thread (tg:<chat_id>)."""
+    if parsed.get("chat_type", "private") == "private":
+        return f"dm:{member['id']}"
+    return f"tg:{parsed['chat_id']}"
 
 
 @router.post("/tg/{secret}")
@@ -65,7 +69,7 @@ async def telegram_webhook(
     # always returns 200 (a 500 would make Telegram redeliver the update).
     await telegram.send_typing(chat_id)
     reply = await turn.handle_turn(member=member, text=parsed["text"],
-                                   channel="telegram", thread=thread_for(chat_id))
+                                   channel="telegram", thread=thread_for(parsed, member))
     await telegram.send_message(chat_id, reply)
     return {"ok": True}
 
@@ -98,7 +102,7 @@ async def handle_voice(member, parsed):
         return
 
     reply = await turn.handle_turn(member=member, text=text, channel="telegram",
-                                   thread=thread_for(chat_id), voice=True)
+                                   thread=thread_for(parsed, member), voice=True)
 
     # Text-first: show the reply the instant the brain finishes (feels immediate,
     # gives a skimmable answer), then send the spoken note once TTS returns.

@@ -28,8 +28,12 @@ Channels (`app/channels/`) are thin adapters: verify, identify the member, pick 
 key, call `turn.handle_turn`, deliver the reply. `handle_turn` is the single entry point: it
 runs `brain.think`, logs the turn **afterwards** (so history never holds the current message
 twice), and never raises. The brain only knows the channel as a label in its context, plus
-`voice=True` for shorter, spoken replies. History is keyed by `thread` (`tg:<chat_id>`,
-`web:<member_id>`, `room`); user turns reach the model prefixed with the speaker's name.
+`voice=True` for shorter, spoken replies. History is keyed by `thread`: `dm:<member_id>` is a
+member's personal thread **shared by their Telegram DM and the web app**; `tg:<chat_id>` is a
+Telegram group; `room` (Phase 8) is the shared speaker. User turns reach the model prefixed
+with the speaker's name. The web app's lists/packages/calendar screens are plain views over
+the same tables (same `db`/`calendar_svc` functions as the tools). Only chat goes through
+Claude.
 
 ## Stack
 
@@ -44,12 +48,16 @@ twice), and never raises. The brain only knows the channel as a label in its con
 ## Project layout
 
 ```
-app/  → main.py (app setup + GET / version), channels/telegram.py (webhook adapter),
-        turn.py (handle_turn), brain.py (tool loop), prompts.py (static persona + dynamic
-        context), tools.py, db.py, telegram.py (Bot API client), calendar_svc.py,
-        embeddings.py, geo.py, stt.py, tts.py, config.py
-schema.sql, seed.example.sql (real seed.sql is gitignored), requirements.txt (pinned),
-Procfile, nixpacks.toml, .env.example, README.md (recruiter-facing)
+app/  → main.py (app setup, GET /api/health version, serves web/dist as an SPA),
+        channels/telegram.py (webhook adapter), channels/web.py (/api for the web app),
+        auth.py (Telegram-code login + sessions), push.py (web push), turn.py
+        (handle_turn), brain.py (tool loop), prompts.py (static persona + dynamic context),
+        tools.py, db.py, telegram.py (Bot API client), calendar_svc.py, embeddings.py,
+        geo.py, stt.py, tts.py, config.py
+web/  → React + TypeScript PWA (Vite): src/pages, src/components, src/sw.ts (service
+        worker), src/api.ts (typed client), styles.css (design tokens)
+schema.sql (fresh DB), migrations/ (changes for the live DB), seed.example.sql (real
+seed.sql is gitignored), requirements.txt (pinned), Dockerfile, .env.example, README.md
 local/ → gitignored private notes: real roster, ids, calendar id, draft env
 scripts/ → set_webhook.sh, backfill_embeddings.py
 tests/smoke.py → offline smoke suite (network + DB faked)
@@ -117,13 +125,36 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
 - **`sendVoice` needs OGG/Opus; ElevenLabs returns MP3** → ffmpeg transcode (`nixpacks.toml`
   `aptPkgs`). An MP3 sent to `sendVoice` won't render as a voice note.
 - **Pinned dependencies**: bump versions deliberately and re-run the smoke suite. `anthropic`
-  1.x moves to `httpx2` and is a separate migration.
+  1.x moves to `httpx2` and is a separate migration. Frontend versions are pinned in
+  `web/package-lock.json` (React Router 7, TypeScript 5.9 on purpose).
+- **Web login** is a 6-digit code DM'd by Telegram (works inside installed iPhone apps, where
+  OAuth/magic-link redirects land in Safari). Only hashes of codes/session tokens are stored
+  (`SESSION_PEPPER`). `request-code` always answers `ok`: never reveal who's a member. Every
+  mutating `/api` call needs the `X-Abdo: 1` header (CSRF), and the session cookie is
+  HttpOnly + Secure + SameSite=Lax.
+- **Don't let refetches unmount the login screen**: the `me` query has
+  `refetchOnWindowFocus: false`. Switching to Telegram to read the code and back used to reset
+  the code step.
+- **Mixed Arabic/English text**: use `unicode-bidi: plaintext` so each line reads in its own
+  direction. In lists, also pin `text-align: left`, or Arabic rows flush right. Chat bubbles
+  keep `dir="auto"` alignment on purpose. A trailing "?" landing on the left in Arabic-first
+  lines is correct bidi behaviour, not a bug.
+- **Webhook secret never in logs**: `main.RedactWebhookSecret` rewrites `/tg/<secret>` in
+  uvicorn's access log. Keep it if logging changes.
+- **Service workers don't run in the desktop app's built-in preview browser**. Test the
+  PWA/push in real Chrome or on a phone. iOS push only works from the Home Screen app (16.4+).
+- **Deploy is the `Dockerfile`** (Node builds `web/`, Python 3.13 runs the app, ffmpeg
+  installed). `GET /` serves the web app; the version marker is at `GET /api/health`.
 
 ## Commands
 
-- Install: `pip install -r requirements.txt`
-- Run locally: `uvicorn app.main:app --reload`
-- Smoke tests: `.venv/bin/python tests/smoke.py`
+- Install: `pip install -r requirements.txt` and `cd web && npm ci`
+- Run locally: `uvicorn app.main:app --reload` (API) + `cd web && npm run dev` (Vite proxies `/api`)
+- **Demo mode** (no DB/Claude/Telegram; fake data, login codes printed to the terminal):
+  `cd web && npm run build && cd .. && .venv/bin/python tests/demo_server.py` → http://localhost:8000
+- Smoke tests: `.venv/bin/python tests/smoke.py` · frontend: `cd web && npm run typecheck && npm test && npm run build`
+- Apply a migration to the live DB: `psql "$URL" -v ON_ERROR_STOP=1 -f migrations/<file>.sql`
+- Push keys (once): `.venv/bin/python scripts/gen_vapid.py` · app icons: `cd web && npm run icons`
 - Apply schema: `psql "$DATABASE_URL" -f schema.sql`; seed members with the gitignored
   `seed.sql` (template: `seed.example.sql`); add a member's Telegram id later with an `UPDATE`
 - Register webhook: `scripts/set_webhook.sh https://<app>.up.railway.app` (reads `.env`; base URL only)
@@ -136,10 +167,12 @@ The full plan, decisions log, and later-phase outlines are in `docs/ROADMAP.md`.
 
 - **Phases 1–4 (done, Egypt edition)** → `docs/egypt/`: Telegram bot, persona, identity, RAG
   facts, Google Calendar, live location, Egyptian voice, shopping list, orders, web search.
-- **Phase 5 (current: built, awaiting deploy + live checks)** → `docs/abdo_phase5_rehome_spec.md`:
-  move to the Waterloo suite: fresh DB, suite members, `America/Toronto`, persona rewrite,
-  brain/channel separation (`handle_turn`), speaker-aware logs, Haiku 5.5 + prompt caching,
-  packages, new Telegram bot, public-repo hygiene.
-- **Phase 6** → web app (PWA). **Phase 7** → scheduler, daily briefing, prayer times, timers,
+- **Phase 5 (deployed 2026-10-11; calendar live check + roommates' ids pending)** →
+  `docs/abdo_phase5_rehome_spec.md`: move to the Waterloo suite: fresh DB, suite members,
+  `America/Toronto`, persona rewrite, brain/channel separation (`handle_turn`), speaker-aware
+  logs, Haiku 5.5 + prompt caching, packages, new Telegram bot, public-repo hygiene.
+  Watch item: occasional MSA sentences since the move. Note the triggering message if it recurs.
+- **Phase 6 (current: built, awaiting deploy + phone checks)** → `docs/abdo_phase6_webapp_spec.md`:
+  web app (React PWA), Telegram-code login, shared DM thread, push infrastructure, Dockerfile. **Phase 7** → scheduler, daily briefing, prayer times, timers,
   status, expenses, timetables, deadlines, groceries, polls, buses. **Phase 8** → always-on room
   device (wake word, speaker ID; prove on a Mac before buying hardware). Specs written when each starts.

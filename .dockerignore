@@ -1,0 +1,23 @@
+# Never ship secrets or private household data into the image.
+.env
+.env.*
+!.env.example
+local/
+seed.sql
+*.dump
+
+# Local tooling and build output (rebuilt inside the image).
+.git
+.venv
+venv
+**/__pycache__
+**/node_modules
+web/dist
+.DS_Store
+.claude
+
+# Not needed at runtime.
+docs
+tests
+README.md
+CLAUDE.md

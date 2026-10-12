@@ -26,9 +26,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import brain, db, tools, telegram, embeddings, turn, prompts  # noqa: E402
 
-ZAIN = {"id": 1, "name": "Zain"}
-MO = {"id": 2, "name": "Mo"}
-NAMES = {1: "Zain", 2: "Mo"}
+ZAIN = {"id": 1, "name": "Zain", "arabic_name": "زين", "telegram_id": 111}
+MO = {"id": 2, "name": "Mo", "arabic_name": "مو", "telegram_id": 222}
+SAM = {"id": 3, "name": "Sam", "arabic_name": "سام", "telegram_id": None}   # no Telegram yet
+MEMBERS = {1: ZAIN, 2: MO, 3: SAM}
+NAMES = {1: "Zain", 2: "Mo", 3: "Sam"}
 
 
 # --- In-memory fake of the db layer ------------------------------------------
@@ -41,6 +43,9 @@ class FakeDB:
         self.locations = {}          # member_id -> (lat, lng), written by upsert
         self.loc_rows = {}           # name.lower() -> asyncpg-style row dict, for reads
         self.members_by_tg = {111: ZAIN, 222: MO}
+        self.codes = []
+        self.sessions = {}
+        self.push_subs = {}
 
     # members
     async def get_member_by_telegram_id(self, tg_id):
@@ -50,11 +55,76 @@ class FakeDB:
         return "Zain (زين), Mo (مو)"
 
     async def get_member_id_by_name(self, name):
-        return {"zain": 1, "mo": 2}.get((name or "").lower())
+        return {"zain": 1, "mo": 2, "sam": 3}.get((name or "").strip().lower())
+
+    async def get_member(self, member_id):
+        return MEMBERS.get(member_id)
 
     # conversation log
     async def log_message(self, **row):
-        self.logged.append(row)
+        self._msg_seq = getattr(self, "_msg_seq", 0) + 1
+        self.logged.append({"id": self._msg_seq, "created_at": datetime.now(timezone.utc), **row})
+
+    async def thread_page(self, thread, before_id=None, limit=30):
+        rows = [r for r in self.logged if r["thread"] == thread
+                and (before_id is None or r["id"] < before_id)]
+        rows = sorted(rows, key=lambda r: r["id"], reverse=True)[:limit]
+        return [{**r, "speaker": NAMES.get(r["member_id"])} for r in rows]
+
+    # web login + sessions
+    async def create_login_code(self, member_id, code_hash, expires_at):
+        self._code_seq = getattr(self, "_code_seq", 0) + 1
+        self.codes.append({"id": self._code_seq, "member_id": member_id, "code_hash": code_hash,
+                           "expires_at": expires_at, "attempts": 0, "used": False,
+                           "created_at": datetime.now(timezone.utc)})
+
+    async def count_recent_login_codes(self, member_id, since):
+        return sum(1 for c in self.codes if c["member_id"] == member_id and c["created_at"] >= since)
+
+    async def latest_live_login_code(self, member_id):
+        now = datetime.now(timezone.utc)
+        live = [c for c in self.codes if c["member_id"] == member_id and not c["used"]
+                and c["expires_at"] > now]
+        return live[-1] if live else None
+
+    async def bump_login_code_attempts(self, code_id):
+        for c in self.codes:
+            if c["id"] == code_id:
+                c["attempts"] += 1
+
+    async def use_login_code(self, code_id):
+        for c in self.codes:
+            if c["id"] == code_id and not c["used"]:
+                c["used"] = True
+                return True
+        return False
+
+    async def create_session(self, token_hash, member_id, user_agent, expires_at):
+        self.sessions[token_hash] = {"member_id": member_id, "expires_at": expires_at,
+                                     "last_seen": datetime.now(timezone.utc)}
+
+    async def session_member(self, token_hash):
+        s = self.sessions.get(token_hash)
+        if not s or s["expires_at"] <= datetime.now(timezone.utc):
+            return None
+        return {**MEMBERS[s["member_id"]], "session_last_seen": s["last_seen"]}
+
+    async def touch_session(self, token_hash, expires_at):
+        self.sessions[token_hash].update(expires_at=expires_at, last_seen=datetime.now(timezone.utc))
+
+    async def delete_session(self, token_hash):
+        self.sessions.pop(token_hash, None)
+
+    # push
+    async def save_push_subscription(self, member_id, endpoint, p256dh, auth):
+        self.push_subs[endpoint] = {"member_id": member_id, "endpoint": endpoint,
+                                    "p256dh": p256dh, "auth": auth}
+
+    async def delete_push_subscription(self, endpoint):
+        self.push_subs.pop(endpoint, None)
+
+    async def push_subscriptions_for(self, member_id):
+        return [s for s in self.push_subs.values() if s["member_id"] == member_id]
 
     async def recent_messages(self, thread, limit=10):
         rows = [r for r in self.logged if r["thread"] == thread][-limit:]
@@ -102,7 +172,7 @@ class FakeDB:
     async def add_shopping_item(self, item, qty, member_id):
         if any(s["item"].lower() == item.lower() and not s["bought"] for s in self.shopping):
             return False
-        self.shopping.append({"item": item, "qty": qty, "bought": False})
+        self.shopping.append({"id": len(self.shopping) + 1, "item": item, "qty": qty, "bought": False})
         return True
 
     async def get_shopping_list(self):
@@ -144,6 +214,10 @@ class FakeDB:
 
 fake = FakeDB()
 for _name in ("get_member_by_telegram_id", "roster_string", "get_member_id_by_name",
+              "get_member", "thread_page", "create_login_code", "count_recent_login_codes",
+              "latest_live_login_code", "bump_login_code_attempts", "use_login_code",
+              "create_session", "session_member", "touch_session", "delete_session",
+              "save_push_subscription", "delete_push_subscription", "push_subscriptions_for",
               "log_message", "recent_messages", "add_fact", "nearest_fact", "update_fact",
               "search_facts", "upsert_location", "get_location", "get_all_locations",
               "add_shopping_item", "get_shopping_list", "mark_item_bought",
@@ -878,15 +952,15 @@ def test_parse_update():
     print("Scenario: telegram.parse_update (typed payloads)")
     text_update = {"message": {"chat": {"id": 5}, "from": {"id": 7}, "text": "hi"}}
     check("parses a text message", telegram.parse_update(text_update) ==
-          {"chat_id": 5, "from_user": {"id": 7}, "kind": "text", "text": "hi"})
+          {"chat_id": 5, "chat_type": "private", "from_user": {"id": 7}, "kind": "text", "text": "hi"})
     loc_update = {"edited_message": {"chat": {"id": 5}, "from": {"id": 7},
                                      "location": {"latitude": 43.1, "longitude": -80.2}}}
     check("parses a live-location edit", telegram.parse_update(loc_update) ==
-          {"chat_id": 5, "from_user": {"id": 7}, "kind": "location", "lat": 43.1, "lng": -80.2})
+          {"chat_id": 5, "chat_type": "private", "from_user": {"id": 7}, "kind": "location", "lat": 43.1, "lng": -80.2})
     voice_update = {"message": {"chat": {"id": 5}, "from": {"id": 7},
                                 "voice": {"file_id": "vf1", "duration": 4}}}
     check("parses a voice message", telegram.parse_update(voice_update) ==
-          {"chat_id": 5, "from_user": {"id": 7}, "kind": "voice", "file_id": "vf1", "duration": 4})
+          {"chat_id": 5, "chat_type": "private", "from_user": {"id": 7}, "kind": "voice", "file_id": "vf1", "duration": 4})
     photo = {"message": {"chat": {"id": 5}, "from": {"id": 7}, "photo": [{"file_id": "x"}]}}
     check("ignores unsupported (photo) update", telegram.parse_update(photo) is None)
     check("ignores sender-less update", telegram.parse_update({"message": {"chat": {"id": 5}}}) is None)
@@ -960,9 +1034,17 @@ def test_telegram_webhook():
         brain.client = FakeClient(reply_only("الحمد لله، وانت؟"))
         r = post(text_update)
         check("text reply delivered", r.status_code == 200 and sent == [(5, "الحمد لله، وانت؟")])
-        check("turn logged under thread tg:<chat_id> as the sender",
+        check("private chat logged on the personal thread dm:<member_id>",
               [(x["thread"], x["member_id"], x["role"]) for x in fake.logged]
-              == [("tg:5", 1, "user"), ("tg:5", 1, "assistant")])
+              == [("dm:1", 1, "user"), ("dm:1", 1, "assistant")])
+
+        sent.clear()
+        fake.logged.clear()
+        brain.client = FakeClient(reply_only("أهلاً يا شباب"))
+        post({"message": {"chat": {"id": -100, "type": "group"}, "from": {"id": 222},
+                          "text": "@abdo ezayak"}})
+        check("group chat keeps its own shared thread tg:<chat_id>",
+              sent == [(-100, "أهلاً يا شباب")] and fake.logged[0]["thread"] == "tg:-100")
 
         sent.clear()
         voices.clear()
@@ -982,12 +1064,297 @@ def test_telegram_webhook():
                           "voice": {"file_id": "vf2", "duration": 999}}})
         check("over-long voice note politely declined", sent == [(5, tg_channel.TOO_LONG_VOICE)])
 
+        from app import main as _main
         check("health endpoint reports the version",
-              client.get("/").json()["version"].endswith("suite-rehome"))
+              client.get("/api/health").json()["version"] == _main.VERSION)
     finally:
         for mod, attrs in saved.items():
             for k, v in attrs.items():
                 setattr(mod, k, v)
+
+
+def test_access_log_redaction():
+    print("Scenario: uvicorn access log never prints the webhook secret")
+    import logging
+    from app.main import RedactWebhookSecret
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                            ("1.2.3.4:5", "POST", "/tg/supersecret", "1.1", 200), None)
+    RedactWebhookSecret().filter(rec)
+    check("webhook path redacted", "supersecret" not in rec.getMessage()
+          and "/tg/<redacted>" in rec.getMessage())
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                            ("1.2.3.4:5", "GET", "/api/me", "1.1", 200), None)
+    RedactWebhookSecret().filter(rec)
+    check("other paths untouched", "/api/me" in rec.getMessage())
+
+
+def test_web_app():
+    print("Scenario: web app API (login by Telegram code, chat, voice, lists, calendar, push, SPA)")
+    import base64 as _b64
+    import re
+    import tempfile
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from app import auth, push, stt, tts, main as app_main
+
+    settings.session_pepper = "test-pepper"
+    dms = []
+
+    async def send_message(chat_id, text):
+        dms.append((chat_id, text))
+
+    real_send = telegram.send_message
+    telegram.send_message = send_message
+    fake.codes.clear()
+    fake.sessions.clear()
+    client = TestClient(app_main.app, base_url="https://testserver")
+    H = {"X-Abdo": "1"}
+
+    def code_from(dm_text):
+        return re.search(r"\b(\d{6})\b", dm_text).group(1)
+
+    try:
+        # --- auth ---------------------------------------------------------------
+        check("API without a session -> 401", client.get("/api/me").status_code == 401)
+        r = client.post("/api/auth/request-code", json={"name": "Zain"})
+        check("mutating request without X-Abdo -> 403", r.status_code == 403)
+
+        r = client.post("/api/auth/request-code", json={"name": "Zain"}, headers=H)
+        check("request-code ok for a real member", r.json() == {"ok": True})
+        check("code DM'd to that member's Telegram id", len(dms) == 1 and dms[0][0] == 111)
+        check("only the code's hash is stored", code_from(dms[0][1]) not in str(fake.codes))
+
+        dms.clear()
+        r1 = client.post("/api/auth/request-code", json={"name": "Nobody"}, headers=H)
+        r2 = client.post("/api/auth/request-code", json={"name": "Sam"}, headers=H)
+        check("unknown name and no-Telegram member get the same 'ok' (no enumeration)",
+              r1.json() == r2.json() == {"ok": True} and dms == [])
+
+        # Latest code wins; wrong codes count toward the limit.
+        dms.clear()
+        client.post("/api/auth/request-code", json={"name": "zain"}, headers=H)
+        good = code_from(dms[-1][1])
+        bad = "000000" if good != "000000" else "111111"
+        r = client.post("/api/auth/verify", json={"name": "Zain", "code": bad}, headers=H)
+        check("wrong code -> 400, no cookie", r.status_code == 400 and auth.COOKIE not in r.cookies)
+
+        r = client.post("/api/auth/verify", json={"name": "Zain", "code": good}, headers=H)
+        cookie_hdr = r.headers.get("set-cookie", "")
+        check("right code -> member + session cookie", r.status_code == 200
+              and r.json()["member"]["name"] == "Zain" and "abdo_session=" in cookie_hdr)
+        check("cookie is HttpOnly, Secure, SameSite=Lax",
+              "HttpOnly" in cookie_hdr and "Secure" in cookie_hdr and "samesite=lax" in cookie_hdr.lower())
+        check("session token stored only as a hash",
+              r.cookies.get(auth.COOKIE) not in fake.sessions)
+        r = client.post("/api/auth/verify", json={"name": "Zain", "code": good}, headers=H)
+        check("a used code can't be replayed", r.status_code == 400)
+        check("/api/me works with the session", client.get("/api/me").json()["member"]["id"] == 1)
+
+        # Five wrong attempts kill a code, even before the right one is tried.
+        other = TestClient(app_main.app, base_url="https://testserver")
+        dms.clear()
+        other.post("/api/auth/request-code", json={"name": "Mo"}, headers=H)
+        mo_code = code_from(dms[-1][1])
+        wrong = "000000" if mo_code != "000000" else "111111"
+        for _ in range(5):
+            other.post("/api/auth/verify", json={"name": "Mo", "code": wrong}, headers=H)
+        r = other.post("/api/auth/verify", json={"name": "Mo", "code": mo_code}, headers=H)
+        check("5 wrong attempts kill the code", r.status_code == 400)
+
+        # Expired codes never work.
+        dms.clear()
+        other.post("/api/auth/request-code", json={"name": "Mo"}, headers=H)
+        fake.codes[-1]["expires_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+        r = other.post("/api/auth/verify", json={"name": "Mo", "code": code_from(dms[-1][1])}, headers=H)
+        check("expired code rejected", r.status_code == 400)
+
+        # Rate limit: at most 3 codes per member per 15 minutes.
+        fake.codes.clear()
+        dms.clear()
+        for _ in range(5):
+            other.post("/api/auth/request-code", json={"name": "Mo"}, headers=H)
+        check("code requests rate-limited to 3 per window", len(dms) == 3)
+
+        # --- chat ---------------------------------------------------------------
+        fake.logged.clear()
+        fake.logged.append({"id": 900, "thread": "dm:1", "channel": "telegram", "role": "user",
+                            "member_id": 1, "content": "from telegram", "modality": "text",
+                            "speaker_confidence": None, "created_at": datetime.now(timezone.utc)})
+        fake._msg_seq = 900
+        brain.client = FakeClient(reply_only("أهلاً من الويب"))
+        r = client.post("/api/chat", json={"text": "hi from the app"}, headers=H)
+        check("chat goes through handle_turn and returns the reply", r.json() == {"reply": "أهلاً من الويب"})
+        sent_msgs = brain.client.messages.requests[0]["messages"]
+        check("web chat shares the Telegram DM history (dm:<id>)",
+              sent_msgs[0]["content"] == "Zain: from telegram")
+        check("web turn logged with channel=web on dm:1",
+              [(x["thread"], x["channel"]) for x in fake.logged[-2:]] == [("dm:1", "web"), ("dm:1", "web")])
+        h = client.get("/api/chat/history").json()
+        check("history returns both channels, oldest first",
+              [m["channel"] for m in h["messages"]] == ["telegram", "web", "web"] and h["has_more"] is False)
+        h = client.get("/api/chat/history?limit=1").json()
+        check("history pages backwards", len(h["messages"]) == 1 and h["has_more"] is True)
+        older = client.get(f"/api/chat/history?limit=5&before={h['messages'][0]['id']}").json()
+        check("before=<id> returns older messages", len(older["messages"]) == 2)
+        check("chat rejects empty text", client.post("/api/chat", json={"text": ""}, headers=H).status_code == 422)
+
+        # --- voice --------------------------------------------------------------
+        real_tx, real_mp3 = stt.transcribe, tts.synthesize_mp3
+        got = {}
+
+        async def transcribe(audio, filename="x", content_type="x"):
+            got.update(filename=filename, content_type=content_type)
+            return "فين المفتاح؟"
+
+        async def synthesize_mp3(text):
+            return b"mp3-bytes"
+
+        stt.transcribe, tts.synthesize_mp3 = transcribe, synthesize_mp3
+        settings.elevenlabs_api_key, settings.tts_voice_id = "xi-fake", "voice-fake"
+        try:
+            brain.client = FakeClient(reply_only("في الدرج."))
+            r = client.post("/api/chat/voice", headers=H,
+                            files={"audio": ("rec.webm", b"webm-bytes", "audio/webm;codecs=opus")})
+            j = r.json()
+            check("voice: transcript + reply + base64 MP3",
+                  j["transcript"] == "فين المفتاح؟" and j["reply"] == "في الدرج."
+                  and _b64.b64decode(j["audio"]) == b"mp3-bytes")
+            check("recording passed to STT with its real type", got["content_type"] == "audio/webm")
+            check("voice turn logged as modality=voice on channel web",
+                  fake.logged[-1]["modality"] == "voice" and fake.logged[-1]["channel"] == "web")
+
+            async def tts_down(text):
+                raise RuntimeError("elevenlabs down")
+
+            tts.synthesize_mp3 = tts_down
+            brain.client = FakeClient(reply_only("تمام."))
+            j = client.post("/api/chat/voice", headers=H,
+                            files={"audio": ("rec.m4a", b"mp4-bytes", "audio/mp4")}).json()
+            check("TTS failure degrades to text (audio null)", j["reply"] == "تمام." and j["audio"] is None)
+
+            async def blank(audio, filename="x", content_type="x"):
+                return ""
+
+            stt.transcribe = blank
+            n = len(fake.logged)
+            j = client.post("/api/chat/voice", headers=H,
+                            files={"audio": ("rec.webm", b"x", "audio/webm")}).json()
+            check("blank transcript -> 'didn't hear', nothing logged",
+                  j["transcript"] == "" and j["audio"] is None and len(fake.logged) == n)
+        finally:
+            stt.transcribe, tts.synthesize_mp3 = real_tx, real_mp3
+            settings.elevenlabs_api_key, settings.tts_voice_id = None, None
+
+        # --- shopping + packages ---------------------------------------------------
+        fake.shopping = []
+        check("add item", client.post("/api/shopping", json={"item": "rice"}, headers=H).status_code == 200)
+        check("duplicate item -> 409", client.post("/api/shopping", json={"item": "Rice"}, headers=H).status_code == 409)
+        check("list shows it", [i["item"] for i in client.get("/api/shopping").json()["items"]] == ["rice"])
+        check("bought absent item -> 404",
+              client.post("/api/shopping/bought", json={"item": "eggs"}, headers=H).status_code == 404)
+        client.post("/api/shopping/bought", json={"item": "rice"}, headers=H)
+        check("bought item leaves the list", client.get("/api/shopping").json()["items"] == [])
+        check("Abdo sees the same rows the app wrote", fake.shopping[0]["bought"] is True)
+
+        fake.packages = []
+        r = client.post("/api/packages", json={"description": "lamp", "day": "tomorrow"}, headers=H)
+        check("package added, owner defaults to the logged-in member",
+              r.status_code == 200 and fake.packages[0]["owner_id"] == 1)
+        check("day resolved in code",
+              fake.packages[0]["expected_on"] == (datetime.now(TZ) + timedelta(days=1)).date())
+        check("bad day -> 400",
+              client.post("/api/packages", json={"description": "x", "day": "someday"}, headers=H).status_code == 400)
+        check("unknown owner -> 400",
+              client.post("/api/packages", json={"description": "x", "owner": "Bob"}, headers=H).status_code == 400)
+        pk = client.get("/api/packages").json()["packages"]
+        check("packages listed with owner + ISO date", pk[0]["owner"] == "Zain" and pk[0]["expected_on"])
+        check("bad status -> 400",
+              client.patch(f"/api/packages/{pk[0]['id']}", json={"status": "lost"}, headers=H).status_code == 400)
+        check("arrived ok",
+              client.patch(f"/api/packages/{pk[0]['id']}", json={"status": "arrived"}, headers=H).status_code == 200)
+        check("unknown id -> 404",
+              client.patch("/api/packages/99", json={"status": "arrived"}, headers=H).status_code == 404)
+
+        # --- calendar ---------------------------------------------------------------
+        global _fake_events
+        _fake_events = [{"id": "e1", "summary": "Dinner", "start": "2026-10-16T23:00:00Z"}]
+        ev = client.get("/api/calendar").json()
+        check("calendar events carry code-resolved local day/time",
+              ev["configured"] and ev["events"][0]["day"] == "Friday 16 October 2026"
+              and ev["events"][0]["time"] == "19:00")
+        real_get = calendar_svc.get_events
+
+        def degraded(days_ahead=7):
+            raise calendar_svc.CalendarReadError("boundary")
+
+        calendar_svc.get_events = degraded
+        try:
+            check("degraded calendar read -> 503, never an empty list",
+                  client.get("/api/calendar").status_code == 503)
+        finally:
+            calendar_svc.get_events = real_get
+
+        # --- push ------------------------------------------------------------------
+        check("no push key when push isn't configured", client.get("/api/push/public-key").json() == {"key": None})
+        check("test push -> 503 when not configured",
+              client.post("/api/push/test", headers=H).status_code == 503)
+        sub = {"endpoint": "https://push.example/abc", "keys": {"p256dh": "p", "auth": "a"}}
+        check("subscribe stores the subscription",
+              client.post("/api/push/subscribe", json=sub, headers=H).status_code == 200
+              and "https://push.example/abc" in fake.push_subs)
+        check("non-https endpoint rejected",
+              client.post("/api/push/subscribe", headers=H,
+                          json={**sub, "endpoint": "http://x"}).status_code == 400)
+        settings.vapid_public_key, settings.vapid_private_key = "pub", "priv"
+        real_send_push = push._send
+        delivered = []
+        push._send = lambda s, payload: delivered.append((s["endpoint"], payload))
+        try:
+            r = client.post("/api/push/test", headers=H)
+            check("test push delivered to the member's device",
+                  r.json() == {"sent": 1} and "notifications work" in delivered[0][1])
+
+            from pywebpush import WebPushException
+
+            def gone(s, payload):
+                raise WebPushException("gone", response=SimpleNamespace(status_code=410))
+
+            push._send = gone
+            client.post("/api/push/test", headers=H)
+            check("expired subscription (410) is deleted", "https://push.example/abc" not in fake.push_subs)
+        finally:
+            push._send = real_send_push
+            settings.vapid_public_key, settings.vapid_private_key = None, None
+
+        # --- logout ----------------------------------------------------------------
+        client.post("/api/auth/logout", headers=H)
+        check("logout ends the session", client.get("/api/me").status_code == 401)
+
+        # --- serving the SPA ---------------------------------------------------------
+        real_dist = app_main.WEB_DIST
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = Path(tmp)
+            (dist / "index.html").write_text("<!doctype html><title>Abdo</title>")
+            (dist / "sw.js").write_text("// sw")
+            (dist / "assets").mkdir()
+            (dist / "assets" / "app-123.js").write_text("// app")
+            app_main.WEB_DIST = dist.resolve()
+            try:
+                r = client.get("/lists")
+                check("client-side route serves index.html", "<title>Abdo</title>" in r.text)
+                r = client.get("/sw.js")
+                check("service worker served, never cached", r.text == "// sw"
+                      and r.headers.get("cache-control") == "no-cache")
+                check("hashed asset served", client.get("/assets/app-123.js").text == "// app")
+                check("unknown /api path is a JSON 404, not the app",
+                      client.get("/api/nope").status_code == 404)
+                r = client.get("/..%2F..%2Fetc%2Fpasswd")
+                check("path traversal falls back to index.html", "<title>Abdo</title>" in r.text)
+            finally:
+                app_main.WEB_DIST = real_dist
+    finally:
+        telegram.send_message = real_send
+        settings.session_pepper = None
 
 
 def test_tts_model_routing():
@@ -1038,7 +1405,9 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    # TestClient runs its own event loop, so the webhook test runs outside asyncio.run.
+    # TestClient runs its own event loop, so the HTTP tests run outside asyncio.run.
     test_telegram_webhook()
+    test_access_log_redaction()
+    test_web_app()
     print(f"\nTOTAL: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

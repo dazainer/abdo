@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     voice_replies: bool = True                  # reply with voice when the user sent voice
     reply_text_alongside_voice: bool = True     # send text first (instant), then the voice note
     max_voice_seconds: int = 60                 # ignore monologues longer than this
+    # Web app (Phase 6). Without SESSION_PEPPER the web login is disabled.
+    session_pepper: str | None = None           # random string; hashes login codes + session tokens
+    cookie_secure: bool = True                  # set false only for http://localhost dev
+    vapid_public_key: str | None = None         # web push (scripts/gen_vapid.py)
+    vapid_private_key: str | None = None
+    vapid_subject: str = "mailto:abdo@example.com"
 
 
 settings = Settings()

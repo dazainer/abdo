@@ -43,15 +43,12 @@ new household model, fresh database, Haiku 5.5 + prompt caching, persona for the
 public-repo hygiene + a real README.
 **Exit:** all four roommates using Abdo on Telegram day to day.
 
-### Phase 6: Abdo's web app (PWA), outline
-- Served from FastAPI (static files + JSON API). Installable to the home screen on iOS/Android.
-- **Login:** Telegram Login Widget (no passwords; it reuses the identity everyone already has).
-  Fallback: per-roommate magic link.
-- **Pages:** chat (text + push-to-talk via the browser mic → same STT path), shared lists
-  (groceries, packages), a household dashboard view (later the room device's screen).
-- **Web push** notifications (VAPID, free). On iOS they require the PWA to be installed to the home screen.
-- **Mute control** for the room device (wired up in Phase 8).
-- Open: frontend stack (plain JS/htmx vs a small framework). Decide when speccing.
+### Phase 6: Abdo's web app (PWA) → `docs/abdo_phase6_webapp_spec.md`
+React + TypeScript (Vite) PWA served by the same FastAPI service; login with a 6-digit code
+delivered by Telegram DM; one personal thread per member shared by Telegram DMs and the app;
+chat (text + hold-to-talk voice), shopping list, packages, calendar view, settings; web push
+infrastructure only (real notifications arrive in Phase 7); Dockerfile deploy; webhook-secret
+log redaction. Room-device mute control moves to Phase 8.
 
 ### Phase 7: Proactive Abdo + student-life features, outline
 Split in two so each half ships on its own.

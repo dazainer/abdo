@@ -68,16 +68,18 @@ async def send_voice(chat_id: int, ogg_bytes: bytes) -> None:
 def parse_update(update: dict):
     """Return a typed payload dict, or None for updates we ignore.
 
-    {"kind": "text", "chat_id", "from_user", "text"}
-    {"kind": "location", "chat_id", "from_user", "lat", "lng"}
-    {"kind": "voice", "chat_id", "from_user", "file_id", "duration"}
+    {"kind": "text", "chat_id", "chat_type", "from_user", "text"}
+    {"kind": "location", "chat_id", "chat_type", "from_user", "lat", "lng"}
+    {"kind": "voice", "chat_id", "chat_type", "from_user", "file_id", "duration"}
 
+    chat_type is Telegram's "private" | "group" | "supergroup" | "channel".
     Live-location updates arrive as `edited_message`, so read that too.
     """
     msg = update.get("message") or update.get("edited_message")
     if not msg or "from" not in msg:
         return None  # ignore channel posts / updates without a sender
-    base = {"chat_id": msg["chat"]["id"], "from_user": msg["from"]}
+    base = {"chat_id": msg["chat"]["id"], "chat_type": msg["chat"].get("type", "private"),
+            "from_user": msg["from"]}
     if "text" in msg:
         return {**base, "kind": "text", "text": msg["text"]}
     if "location" in msg:

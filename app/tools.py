@@ -14,11 +14,12 @@ log = logging.getLogger("abdo")
 FACT_DEDUP_DISTANCE = 0.15
 
 
-def _format_event(e: dict) -> str:
-    """Render an event with its weekday resolved in CODE, never by the model — the
-    model guessing weekdays once put an event on the wrong day. Start may be an
-    all-day date ('2026-06-19') or a timed dateTime; an offset-aware time is shown
-    in local time (so a UTC-stamped event can't land on the wrong day or hour)."""
+def event_when(e: dict) -> dict:
+    """An event's day and time, resolved in CODE, never by the model — the model
+    guessing weekdays once put an event on the wrong day. Start may be an all-day
+    date ('2026-06-19') or a timed dateTime; an offset-aware time is converted to
+    local time (so a UTC-stamped event can't land on the wrong day or hour).
+    Returns {"date": local ISO date, "day": "Friday 16 October 2026", "time": "19:00" | None}."""
     start = e["start"]
     has_time = "T" in start
     try:
@@ -28,11 +29,13 @@ def _format_event(e: dict) -> str:
     except ValueError:
         d = date.fromisoformat(start[:10])
         dt = datetime(d.year, d.month, d.day)
-    when = dt.strftime("%A %d %B %Y")
-    if has_time:
-        when += f" at {dt.strftime('%H:%M')}"
-    else:
-        when += " (all day)"
+    return {"date": dt.date().isoformat(), "day": dt.strftime("%A %d %B %Y"),
+            "time": dt.strftime("%H:%M") if has_time else None}
+
+
+def _format_event(e: dict) -> str:
+    w = event_when(e)
+    when = w["day"] + (f" at {w['time']}" if w["time"] else " (all day)")
     return f"- {when}: {e['summary']} (id: {e['id']})"
 
 
@@ -288,7 +291,7 @@ TOOLS = [
 ]
 
 
-async def _read_calendar(days_ahead: int):
+async def read_calendar(days_ahead: int):
     """Read upcoming events, retrying once on a degraded read. googleapiclient is
     blocking, so each attempt runs off the event loop. A persistent failure raises
     CalendarReadError — the caller turns that into an honest 'try again' and STOPS,
@@ -352,7 +355,7 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
         if not calendar_svc.is_configured():
             return "The shared calendar isn't connected yet."
         try:
-            events = await _read_calendar(tool_input.get("days_ahead", 7))
+            events = await read_calendar(tool_input.get("days_ahead", 7))
         except calendar_svc.CalendarReadError as e:
             # A degraded read (boundary / FAILED_PRECONDITION) must NOT be reported
             # as an empty calendar — that's exactly what makes the model create a

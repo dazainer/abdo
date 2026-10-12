@@ -15,3 +15,11 @@ local/
 
 # Real member seed (names, Telegram ids). Committed template: seed.example.sql
 seed.sql
+
+# macOS Finder metadata
+.DS_Store
+
+# Frontend
+node_modules/
+web/dist/
+web/node_modules/.tmp/
