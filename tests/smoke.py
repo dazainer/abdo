@@ -1145,6 +1145,15 @@ def test_telegram_webhook():
                 setattr(mod, k, v)
 
 
+def test_config_strips_whitespace():
+    print("Scenario: secrets pasted with stray whitespace still match")
+    from app.config import Settings
+    s = Settings(anthropic_api_key="k", telegram_bot_token=" 1:abc\n", telegram_webhook_secret="  s3cret \n",
+                 database_url="postgresql://x/y")
+    check("webhook secret stripped", s.telegram_webhook_secret == "s3cret")
+    check("bot token stripped", s.telegram_bot_token == "1:abc")
+
+
 def test_access_log_redaction():
     print("Scenario: uvicorn access log never prints the webhook secret")
     import logging
@@ -1801,6 +1810,7 @@ if __name__ == "__main__":
     # TestClient runs its own event loop, so the HTTP tests run outside asyncio.run.
     test_telegram_webhook()
     test_access_log_redaction()
+    test_config_strips_whitespace()
     test_web_app()
     test_web_today()
     print(f"\nTOTAL: {passed} passed, {failed} failed")

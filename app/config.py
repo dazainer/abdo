@@ -2,7 +2,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env")
+    # Strip whitespace from every value: a secret pasted into Railway with a trailing space
+    # or newline otherwise silently fails every comparison (it once 403'd every webhook).
+    model_config = SettingsConfigDict(env_file=".env", str_strip_whitespace=True)
 
     anthropic_api_key: str
     telegram_bot_token: str

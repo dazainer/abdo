@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type ChatMessage, type Member } from "../api";
 import { Sign } from "../components/Sign";
 import { Icon } from "../components/Icon";
-import { canRecord, playMp3, Recorder, unlockAudio, type Recording } from "../lib/recorder";
+import { canRecord, playMp3, prepareToRecord, Recorder, rememberSpoken, spokenAudio, unlockAudio, type Recording } from "../lib/recorder";
 import { clock, dayOf, relativeDay } from "../lib/dates";
 
 type Pending = { kind: "text"; text: string } | { kind: "voice" };
@@ -21,7 +21,7 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
   const [pending, setPending] = useState<Pending | null>(null);
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
-  const [lastAudio, setLastAudio] = useState<{ reply: string; audio: string } | null>(null);
+  const [, setSpokenVersion] = useState(0); // re-render when a reply gains audio
 
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -90,8 +90,9 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
         return;
       }
       if (res.audio) {
-        setLastAudio({ reply: res.reply, audio: res.audio });
-        await playMp3(res.audio);
+        rememberSpoken(res.reply, res.audio);
+        setSpokenVersion((v) => v + 1);
+        if (!(await playMp3(res.audio))) toast("Tap Play to hear Abdo's reply.");
       }
     } catch (err) {
       toast(err instanceof ApiError ? err.message : "Couldn't send the voice note. Try again.");
@@ -103,6 +104,7 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
   // ---- hold to talk ---------------------------------------------------------
   async function startRecording() {
     unlockAudio(); // inside the gesture, so the spoken reply can play later (iOS)
+    prepareToRecord();
     const r = new Recorder();
     recorder.current = r;
     setRecording(true);
@@ -147,7 +149,6 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
   useEffect(() => () => recorder.current?.cancel(), []);
 
   // ---- render -----------------------------------------------------------------
-  const lastAbdoId = [...messages].reverse().find((m) => m.role === "assistant")?.id;
   let prevDay = "";
 
   return (
@@ -178,7 +179,7 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
           const mark = day !== prevDay ? <div className="day-mark">{relativeDay(day)}</div> : null;
           prevDay = day;
           const mine = m.role === "user";
-          const replay = !mine && m.id === lastAbdoId && lastAudio && lastAudio.reply === m.content;
+          const audio = mine ? undefined : spokenAudio(m.content);
           return (
             <div key={m.id} style={{ display: "contents" }}>
               {mark}
@@ -188,8 +189,12 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
                   {m.channel === "telegram" && <><Icon name="telegram" /><span>Telegram</span></>}
                   {m.modality === "voice" && mine && <Icon name="mic" label="Voice" />}
                   <span>{clock(m.created_at)}</span>
-                  {replay && (
-                    <button className="replay" onClick={() => void playMp3(lastAudio.audio)}>Play again</button>
+                  {audio && (
+                    <button className="replay" onClick={() => {
+                      void playMp3(audio, { fromTap: true }).then((ok) => {
+                        if (!ok) toast("Couldn't play the audio. Check that your volume is up.");
+                      });
+                    }}>Play</button>
                   )}
                 </div>
               </div>
@@ -248,7 +253,7 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
             aria-pressed={recording}
             disabled={!!pending && !recording}
             onPointerDown={onMicDown}
-            onPointerUp={() => void finishRecording()}
+            onPointerUp={() => { unlockAudio(); void finishRecording(); }}
             onPointerCancel={() => { recorder.current?.cancel(); recorder.current = null; setRecording(false); }}
             onKeyDown={onMicKey}
             onContextMenu={(e) => e.preventDefault()}

@@ -36,9 +36,14 @@ async def telegram_webhook(
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ):
     # Two-layer check: secret in the URL path + Telegram's secret_token header.
+    # A mismatch is logged loudly (never the secret itself): when it happens it's almost
+    # always config drift, and Telegram just stops getting answers.
     if secret != settings.telegram_webhook_secret:
+        log.warning("webhook rejected: path secret != TELEGRAM_WEBHOOK_SECRET. Fix the Railway "
+                    "variable or re-run scripts/set_webhook.sh")
         raise HTTPException(403, "bad path secret")
     if x_telegram_bot_api_secret_token != settings.telegram_webhook_secret:
+        log.warning("webhook rejected: header secret != TELEGRAM_WEBHOOK_SECRET")
         raise HTTPException(403, "bad header secret")
 
     update = await request.json()

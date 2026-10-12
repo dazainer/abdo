@@ -83,31 +83,107 @@ export class Recorder {
   }
 }
 
-// iOS only plays audio started by a user gesture, and Abdo's spoken reply arrives
-// seconds after the press. An AudioContext resumed during the press stays unlocked,
-// so the reply is decoded and played through it.
-let ctx: AudioContext | null = null;
+// ---- playback --------------------------------------------------------------------
+// iOS only starts audio from a tap, and after the mic has been used it often leaves the
+// AudioContext suspended (or "interrupted"). Two rules keep that from biting:
+//   1. Every tap that might lead to audio calls unlockAudio(), which resumes the context,
+//      or replaces it with a fresh one (a context created inside a tap starts running).
+//   2. playMp3() never waits on resume() for long. Outside a tap, iOS can leave that promise
+//      pending until the NEXT tap; waiting on it used to queue replies silently and then play
+//      them all at once on the next mic press. Now it gives up after a moment and the bubble
+//      keeps its play button instead.
 
-export function unlockAudio(): void {
-  ctx ??= new AudioContext();
-  void ctx.resume().catch(() => undefined);
+type AudioSessionNavigator = Navigator & { audioSession?: { type: string } };
+
+let ctx: AudioContext | null = null;
+let current: AudioBufferSourceNode | null = null;
+
+function setSession(type: "auto" | "playback"): void {
+  // Safari 16.4+: "playback" lets Abdo's voice play even with the ringer switch on silent.
+  const session = (navigator as AudioSessionNavigator).audioSession;
+  if (session) {
+    try {
+      session.type = type;
+    } catch {
+      /* unsupported value on this browser */
+    }
+  }
 }
 
-export async function playMp3(base64: string): Promise<boolean> {
+/** Before using the mic: let the browser pick the right session for recording. */
+export function prepareToRecord(): void {
+  setSession("auto");
+}
+
+/** Call inside a tap or press, before anything that may play audio. */
+export function unlockAudio(): void {
+  const state = ctx?.state as string | undefined;
+  if (!ctx || state === "closed" || state === "interrupted") {
+    void ctx?.close().catch(() => undefined);
+    ctx = new AudioContext();
+  } else if (state === "suspended") {
+    void ctx.resume().catch(() => undefined);
+  }
+}
+
+export function stopAudio(): void {
   try {
-    ctx ??= new AudioContext();
-    if (ctx.state === "suspended") await ctx.resume();
-    if (ctx.state !== "running") return false;
+    current?.stop();
+  } catch {
+    /* already stopped */
+  }
+  current = null;
+}
+
+function within<T>(promise: Promise<T>, ms: number): Promise<void> {
+  return Promise.race([promise.then(() => undefined, () => undefined),
+                       new Promise<void>((r) => setTimeout(r, ms))]);
+}
+
+export const RESUME_WAIT_MS = 400;
+
+/** Play base64 MP3. Returns false (never hangs) if the browser won't play right now. */
+export async function playMp3(base64: string, opts: { fromTap?: boolean } = {}): Promise<boolean> {
+  try {
+    if (opts.fromTap) unlockAudio();
+    const context = ctx;
+    if (!context) return false; // nothing was ever unlocked by a tap
+    if (context.state !== "running") {
+      await within(context.resume(), RESUME_WAIT_MS);
+      // (state changes during the await; TypeScript's narrowing can't see that)
+      if ((context.state as AudioContextState) !== "running") return false;
+    }
+    setSession("playback");
     const raw = atob(base64);
     const bytes = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-    const buffer = await ctx.decodeAudioData(bytes.buffer);
-    const source = ctx.createBufferSource();
+    const buffer = await context.decodeAudioData(bytes.buffer);
+    stopAudio(); // one voice at a time: a new reply cuts off the previous one
+    const source = context.createBufferSource();
     source.buffer = buffer;
-    source.connect(ctx.destination);
+    source.connect(context.destination);
+    source.onended = () => {
+      if (current === source) current = null;
+    };
     source.start();
+    current = source;
     return true;
   } catch {
-    return false; // blocked or undecodable: the bubble keeps a play button
+    return false;
   }
+}
+
+// Spoken replies from this session, by reply text, so every voice reply keeps its play
+// button (also after switching tabs), not just the latest one.
+const spoken = new Map<string, string>();
+const SPOKEN_LIMIT = 20;
+
+export function rememberSpoken(reply: string, base64: string): void {
+  spoken.delete(reply);
+  spoken.set(reply, base64);
+  while (spoken.size > SPOKEN_LIMIT) spoken.delete(spoken.keys().next().value as string);
+}
+
+export function spokenAudio(reply: string): string | undefined {
+  return spoken.get(reply);
 }

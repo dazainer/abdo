@@ -155,6 +155,16 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   or real keys/push config leak into the suite.
 - **Webhook secret never in logs**: `main.RedactWebhookSecret` rewrites `/tg/<secret>` in
   uvicorn's access log. Keep it if logging changes.
+- **iPhone audio in the web app** (`web/src/lib/recorder.ts`): iOS suspends/interrupts the
+  AudioContext after the mic is used, and `resume()` outside a tap can stay pending until the
+  NEXT tap. Never await it unbounded (that queued replies and played them all at once on the
+  next mic press); `playMp3` gives up after 400 ms and the bubble keeps a Play button. Call
+  `unlockAudio()` in every tap that can lead to audio (mic down AND up, Play). One voice at a
+  time. `navigator.audioSession.type = "playback"` lets it play with the ringer on silent.
+- **Secrets are whitespace-stripped** (`str_strip_whitespace` in `config.py`), and a rejected
+  webhook logs a warning. A Railway/`.env` secret mismatch shows up in Telegram's
+  `getWebhookInfo` as `last_error_message: 403`. After rotating `TELEGRAM_WEBHOOK_SECRET`,
+  update Railway AND re-run `scripts/set_webhook.sh`, in that order.
 - **Service workers don't run in the desktop app's built-in preview browser**. Test the
   PWA/push in real Chrome or on a phone. iOS push only works from the Home Screen app (16.4+).
 - **Deploy is the `Dockerfile`** (Node builds `web/`, Python 3.13 runs the app, ffmpeg
