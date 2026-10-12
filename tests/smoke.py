@@ -52,6 +52,8 @@ class FakeDB:
         self.reminders = []
         self.sent_log = set()
         self.statuses = {}
+        self.expenses = []
+        self.settlements = []
 
     # members
     async def get_member_by_telegram_id(self, tg_id):
@@ -172,9 +174,58 @@ class FakeDB:
         return True
 
     # status
-    async def set_status(self, member_id, text, until_at):
+    async def set_status(self, member_id, text, until_at, place=None):
+        p = place or {}
         self.statuses[member_id] = {"member_id": member_id, "name": NAMES[member_id], "text": text,
-                                    "until_at": until_at, "updated_at": datetime.now(timezone.utc)}
+                                    "until_at": until_at, "updated_at": datetime.now(timezone.utc),
+                                    "place": p.get("label"), "place_lat": p.get("lat"),
+                                    "place_lng": p.get("lng"), "place_tz": p.get("tz")}
+
+    # money
+    async def add_expense(self, description, amount_cents, paid_by, created_by, spent_on, shares):
+        self._exp_seq = getattr(self, "_exp_seq", 0) + 1
+        self.expenses.append({"id": self._exp_seq, "description": description, "amount_cents": amount_cents,
+                              "paid_by": paid_by, "created_by": created_by, "spent_on": spent_on,
+                              "deleted": False, "shares": dict(shares)})
+        return self._exp_seq
+
+    async def add_settlement(self, from_member, to_member, amount_cents, created_by, settled_on):
+        self._set_seq = getattr(self, "_set_seq", 0) + 1
+        self.settlements.append({"id": self._set_seq, "from_member": from_member, "to_member": to_member,
+                                 "amount_cents": amount_cents, "created_by": created_by,
+                                 "settled_on": settled_on, "deleted": False})
+        return self._set_seq
+
+    async def money_ledger(self):
+        live = [e for e in self.expenses if not e["deleted"]]
+        return ([{"id": e["id"], "paid_by": e["paid_by"], "amount_cents": e["amount_cents"]} for e in live],
+                [{"member_id": m, "share_cents": c} for e in live for m, c in e["shares"].items()],
+                [t for t in self.settlements if not t["deleted"]])
+
+    async def recent_expenses(self, limit=20):
+        live = [e for e in reversed(self.expenses) if not e["deleted"]][:limit]
+        return [{**{k: v for k, v in e.items() if k != "shares"}, "paid_by_name": NAMES[e["paid_by"]],
+                 "shares": [{"member_id": m, "name": NAMES[m], "share_cents": c} for m, c in sorted(e["shares"].items())]}
+                for e in live]
+
+    async def recent_settlements(self, limit=20):
+        return [{**t, "from_name": NAMES[t["from_member"]], "to_name": NAMES[t["to_member"]]}
+                for t in reversed(self.settlements) if not t["deleted"]][:limit]
+
+    async def delete_expense(self, expense_id, member_id):
+        for e in self.expenses:
+            if e["id"] == expense_id and not e["deleted"] and member_id in (e["paid_by"], e["created_by"]):
+                e["deleted"] = True
+                return e["description"]
+        return None
+
+    async def delete_settlement(self, settlement_id, member_id):
+        for t in self.settlements:
+            if t["id"] == settlement_id and not t["deleted"] and \
+                    member_id in (t["from_member"], t["to_member"], t["created_by"]):
+                t["deleted"] = True
+                return True
+        return False
 
     async def clear_status(self, member_id):
         return self.statuses.pop(member_id, None) is not None
@@ -290,6 +341,8 @@ for _name in ("get_member_by_telegram_id", "roster_string", "get_member_id_by_na
               "all_members", "set_member_prefs", "add_reminder", "upcoming_reminders",
               "cancel_reminder", "due_reminder_ids", "claim_reminder", "claim_daily",
               "set_status", "clear_status", "current_statuses",
+              "add_expense", "add_settlement", "money_ledger", "recent_expenses",
+              "recent_settlements", "delete_expense", "delete_settlement",
               "log_message", "recent_messages", "add_fact", "nearest_fact", "update_fact",
               "search_facts", "upsert_location", "get_location", "get_all_locations",
               "add_shopping_item", "get_shopping_list", "mark_item_bought",
@@ -1671,10 +1724,10 @@ async def test_briefing_build():
               "daily": {"temperature_2m_max": [5.4], "temperature_2m_min": [-2.0],
                         "precipitation_probability_max": [60]}}
 
-    async def good():
+    async def good(lat, lng, tz):
         return sample
 
-    async def bad():
+    async def bad(lat, lng, tz):
         raise RuntimeError("open-meteo down")
 
     global _fake_events
@@ -1686,7 +1739,7 @@ async def test_briefing_build():
     fake.shopping = [{"id": 1, "item": "rice", "qty": None, "bought": False}]
     fake.statuses = {2: {"member_id": 2, "name": "Mo", "text": "away", "until_at": None,
                          "updated_at": now}}
-    briefing._fetch_weather, briefing._weather_cache = good, None
+    briefing._fetch_weather, briefing._weather_cache = good, {}
     try:
         title, body = await briefing.build(ZAIN, now)
         check("greets by Arabic name", title.startswith("صباح الخير يا زين"))
@@ -1708,7 +1761,7 @@ async def test_briefing_build():
               briefing.greeting(now) == "صباح الخير" and briefing.greeting(now.replace(hour=15)) == "أهلاً"
               and briefing.greeting(now.replace(hour=20)) == "مساء الخير")
 
-        briefing._fetch_weather, briefing._weather_cache = bad, None
+        briefing._fetch_weather, briefing._weather_cache = bad, {}
         _, body = await briefing.build(ZAIN, now)
         check("weather failure -> line omitted, not invented", "Weather" not in body)
 
@@ -1724,7 +1777,7 @@ async def test_briefing_build():
         finally:
             calendar_svc.get_events = real_get
     finally:
-        briefing._fetch_weather, briefing._weather_cache = real_fetch, None
+        briefing._fetch_weather, briefing._weather_cache = real_fetch, {}
         fake.statuses = {}
         fake.packages, fake.shopping = [], []
 
@@ -1771,16 +1824,16 @@ def test_web_today():
         from app import briefing as _briefing
         real_fetch = _briefing._fetch_weather
 
-        async def no_weather():
+        async def no_weather(lat, lng, tz):
             raise RuntimeError("offline")
 
-        _briefing._fetch_weather, _briefing._weather_cache = no_weather, None
+        _briefing._fetch_weather, _briefing._weather_cache = no_weather, {}
         try:
             b = c.get("/api/briefing").json()
             check("briefing endpoint: live data for the logged-in member",
                   b["name"] == "زين" and "events" in b and "prayers" in b and b["weather"] is None)
         finally:
-            _briefing._fetch_weather, _briefing._weather_cache = real_fetch, None
+            _briefing._fetch_weather, _briefing._weather_cache = real_fetch, {}
         check("briefing needs a session", TestClient(app_main.app, base_url="https://testserver")
               .get("/api/briefing").status_code == 401)
 
@@ -1793,6 +1846,229 @@ def test_web_today():
         telegram.send_message = real_send
         settings.session_pepper = None
         MEMBERS[1].pop("prefs", None)
+
+
+# =============================================================================
+# Phase 7b.1: money + travel mode
+# =============================================================================
+
+def test_money_math():
+    print("Scenario: money math is exact (cents), balances sum to zero, settle-up is minimal")
+    from app import money
+    pa, ME = money.parse_amount, money.MoneyError
+
+    def bad(raw):
+        try:
+            pa(raw)
+            return False
+        except ME:
+            return True
+
+    check("parses 42, 42.5, $42.50, 1,200", pa("42") == 4200 and pa("42.5") == 4250
+          and pa("$42.50") == 4250 and pa("1,200") == 120000)
+    check("rejects 0, negative, sub-cent, words, absurd",
+          all(bad(x) for x in ("0", "-5", "1.005", "lots", "99999")))
+    for amount, n in ((100, 3), (1, 3), (10000, 3), (4250, 4), (7, 2)):
+        sh = money.split(amount, list(range(1, n + 1)))
+        if sum(sh.values()) != amount or max(sh.values()) - min(sh.values()) > 1:
+            check(f"split {amount}c / {n} exact and fair", False)
+            break
+    else:
+        check("splits always sum exactly and differ by at most 1 cent", True)
+    check("$100 / 3 = 33.34 + 33.33 + 33.33", money.split(10000, [3, 1, 2]) == {1: 3334, 2: 3333, 3: 3333})
+
+    exps = [{"paid_by": 1, "amount_cents": 4200}, {"paid_by": 2, "amount_cents": 1000}]
+    shares = [{"member_id": m, "share_cents": c} for m, c in money.split(4200, [1, 2, 3, 4]).items()] + \
+             [{"member_id": m, "share_cents": c} for m, c in money.split(1000, [2, 3]).items()]
+    sets = [{"from_member": 4, "to_member": 1, "amount_cents": 500}]
+    net = money.balances([1, 2, 3, 4], exps, shares, sets)
+    check("balances sum to zero", sum(net.values()) == 0)
+    check("payer is owed, payback counted", net[1] == 4200 - 1050 - 500 and net[4] == -1050 + 500)
+    plan = money.settle_up(net)
+    after = dict(net)
+    for f, t, c in plan:
+        after[f] += c
+        after[t] -= c
+    check("settle-up zeroes everyone in at most n-1 transfers",
+          all(v == 0 for v in after.values()) and len(plan) <= 3)
+    check("nothing owed -> no transfers", money.settle_up({1: 0, 2: 0}) == [])
+    check("format", money.fmt(1050) == "$10.50" and money.fmt(-5) == "$0.05" and money.fmt(123456) == "$1,234.56")
+
+
+async def test_money_tools():
+    print("Scenario: money tools (default everyone, split_with, exclude, payments, delete rights)")
+    fake.expenses.clear()
+    fake.settlements.clear()
+    out = await tools.run_tool("add_expense", {"description": "groceries", "amount": "42"}, member_id=1)
+    e = fake.expenses[-1]
+    check("default split: everyone, payer = speaker",
+          e["paid_by"] == 1 and set(e["shares"]) == {1, 2, 3} and sum(e["shares"].values()) == 4200)
+    check("result reads the shares back", "Zain $14.00" in out and "Mo $14.00" in out)
+    await tools.run_tool("add_expense", {"description": "pizza", "amount": "20", "paid_by": "Mo",
+                                         "split_with": ["Mo", "Zain"]}, member_id=1)
+    check("split_with + paid_by", fake.expenses[-1]["paid_by"] == 2 and fake.expenses[-1]["shares"] == {1: 1000, 2: 1000})
+    await tools.run_tool("add_expense", {"description": "cleaning", "amount": "9", "exclude": ["Sam"]}, member_id=1)
+    check("exclude narrows everyone", set(fake.expenses[-1]["shares"]) == {1, 2})
+    out = await tools.run_tool("add_expense", {"description": "x", "amount": "ten"}, member_id=1)
+    check("bad amount -> honest error, nothing saved", out.startswith("ERROR") and len(fake.expenses) == 3)
+    out = await tools.run_tool("add_expense", {"description": "x", "amount": "5", "split_with": ["Bob"]}, member_id=1)
+    check("unknown name -> honest error", out.startswith("ERROR") and len(fake.expenses) == 3)
+
+    out = await tools.run_tool("get_balances", {}, member_id=1)
+    # Zain paid 42 + 9, owes 14 + 10 + 4.50 -> +22.50; Mo paid 20, owes 28.50 -> -8.50; Sam -14.
+    check("balances", "Zain: is owed $22.50" in out and "Mo: owes $8.50" in out and "Sam: owes $14.00" in out)
+    check("settle-up plan", "To settle up: Sam pays Zain $14.00; Mo pays Zain $8.50" in out)
+    out = await tools.run_tool("record_payment", {"to": "Zain", "amount": "8.50"}, member_id=2)
+    check("payment recorded from the speaker", out.startswith("Recorded payment") and fake.settlements[-1]["from_member"] == 2)
+    out = await tools.run_tool("record_payment", {"to": "Mo", "amount": "5"}, member_id=2)
+    check("paying yourself -> error", out.startswith("ERROR"))
+    out = await tools.run_tool("get_balances", {}, member_id=1)
+    check("payment moves the balances", "Mo: all square" in out)
+
+    out = await tools.run_tool("delete_expense", {"expense_id": fake.expenses[0]["id"]}, member_id=3)
+    check("can't delete an expense you neither paid nor recorded", out.startswith("ERROR"))
+    out = await tools.run_tool("delete_expense", {"expense_id": fake.expenses[0]["id"]}, member_id=1)
+    check("payer can delete", out.startswith("Deleted") and fake.expenses[0]["deleted"])
+    out = await tools.run_tool("list_expenses", {}, member_id=1)
+    check("deleted expense gone from the list", "groceries" not in out and "pizza" in out)
+    check("money persona: confirm once, no arithmetic", "Never do the arithmetic yourself" in prompts.STATIC_PERSONA)
+
+
+async def test_travel_mode():
+    print("Scenario: travel mode (geocode, prayers/briefing follow the place, expiry returns home)")
+    from app import location, prayer, scheduler, notify, briefing
+    real_search = location._search
+
+    async def search(name):
+        if name.lower().startswith("montreal"):
+            return {"results": [{"name": "Montreal", "country": "Canada", "latitude": 45.50884,
+                                 "longitude": -73.58781, "timezone": "America/Toronto"}]}
+        return {}
+
+    location._search = search
+    fake.statuses = {}
+    try:
+        out = await tools.run_tool("set_status", {"text": "away", "place": "Montreal",
+                                                  "until_day": "Sunday"}, member_id=1)
+        check("place geocoded and confirmed", "Travel mode: Montreal, Canada" in out
+              and fake.statuses[1]["place_lat"] == 45.50884)
+        out = await tools.run_tool("set_status", {"text": "away", "place": "Atlantis"}, member_id=2)
+        check("unknown place -> honest error, no status", out.startswith("ERROR") and 2 not in fake.statuses)
+
+        loc = await location.location_for(1)
+        check("traveller's location is the place", loc.label == "Montreal, Canada" and not loc.is_home)
+        check("others stay home", (await location.location_for(2)).is_home)
+        out = await tools.run_tool("get_prayer_times", {}, member_id=1)
+        check("prayer tool uses the traveller's place", "in Montreal, Canada" in out)
+
+        # Scheduler: at Montreal's Asr (earlier than Waterloo's), only the traveller gets it.
+        sent = []
+
+        async def deliver(member, title, body, url="/", silent=False):
+            sent.append((member["id"], title, body))
+            return "push"
+
+        real_deliver = notify.deliver
+        notify.deliver = deliver
+        for m in MEMBERS.values():
+            m["prefs"] = {"briefing": False}
+        fake.sent_log.clear()
+        try:
+            day = datetime.now(TZ).date()
+            mtl = prayer.times_at(day, loc)
+            home = prayer.times_for(day)
+            check("Montreal's Asr is ~25 min before Waterloo's",
+                  timedelta(minutes=15) < home["asr"] - mtl["asr"] < timedelta(minutes=35))
+            await scheduler.tick(mtl["asr"] + timedelta(minutes=2))
+            asr = [(m, b) for m, t, b in sent if t.startswith("Asr")]
+            check("traveller gets Asr at the place's time, labelled", asr == [(1, f"It's Asr time in Montreal, Canada: {prayer.clock12(mtl['asr'])}")])
+            sent.clear()
+            await scheduler.tick(home["asr"] + timedelta(minutes=2))
+            check("home members get Asr at home time; traveller not twice",
+                  sorted(m for m, t, _ in sent if t.startswith("Asr")) == [2, 3])
+        finally:
+            notify.deliver = real_deliver
+            for m in MEMBERS.values():
+                m.pop("prefs", None)
+
+        # Briefing: weather fetched for the place, travel note in the text.
+        fetched = []
+
+        async def weather(lat, lng, tz):
+            fetched.append((lat, lng))
+            return {"current": {"temperature_2m": 5, "apparent_temperature": 2, "weather_code": 3},
+                    "daily": {"temperature_2m_max": [8], "temperature_2m_min": [1],
+                              "precipitation_probability_max": [10]}}
+
+        real_fetch = briefing._fetch_weather
+        briefing._fetch_weather, briefing._weather_cache = weather, {}
+        try:
+            b = await briefing.gather(ZAIN)
+            check("briefing weather for the place", fetched == [(45.50884, -73.58781)] and b["place"] == "Montreal, Canada")
+            check("briefing text says so", "In Montreal, Canada (travel mode)" in briefing.render_text(b)[1])
+        finally:
+            briefing._fetch_weather, briefing._weather_cache = real_fetch, {}
+
+        fake.statuses[1]["until_at"] = datetime.now(timezone.utc) - timedelta(minutes=1)
+        check("expired travel status -> back home", (await location.location_for(1)).is_home)
+        brain.client = FakeClient(reply_only("ok"))
+        fake.statuses[1]["until_at"] = None
+        await brain.think(MO, "dm:2", "where's Zain?")
+        check("Abdo's context shows the place", "Zain: away (in Montreal, Canada)" in brain.client.messages.requests[0]["system"][1]["text"])
+    finally:
+        location._search = real_search
+        fake.statuses = {}
+
+
+def test_web_money():
+    print("Scenario: web money (overview, add with split, settle, delete rights, validation)")
+    import re
+    from fastapi.testclient import TestClient
+    from app import main as app_main
+    settings.session_pepper = "test-pepper"
+    dms = []
+
+    async def capture(chat_id, text, disable_notification=False):
+        dms.append(text)
+
+    real_send = telegram.send_message
+    telegram.send_message = capture
+    H = {"X-Abdo": "1"}
+    fake.expenses.clear()
+    fake.settlements.clear()
+    fake.codes.clear()       # an earlier test deliberately rate-limited Mo's login codes
+    try:
+        c = TestClient(app_main.app, base_url="https://testserver")
+        c.post("/api/auth/request-code", json={"name": "Mo"}, headers=H)
+        c.post("/api/auth/verify", json={"name": "Mo", "code": re.search(r"\b(\d{6})\b", dms[-1]).group(1)}, headers=H)
+
+        r = c.post("/api/expenses", json={"description": "Walmart run", "amount": "30"}, headers=H)
+        check("add expense: everyone, payer = me", r.status_code == 200 and fake.expenses[-1]["paid_by"] == 2
+              and fake.expenses[-1]["shares"] == {1: 1000, 2: 1000, 3: 1000})
+        r = c.post("/api/expenses", json={"description": "x", "amount": "10", "split_with": [1, 2]}, headers=H)
+        check("add expense with a chosen split", fake.expenses[-1]["shares"] == {1: 500, 2: 500})
+        check("bad amount -> 400", c.post("/api/expenses", json={"description": "x", "amount": "0"}, headers=H).status_code == 400)
+        check("unknown roommate -> 400", c.post("/api/expenses", json={"description": "x", "amount": "5",
+                                                                      "split_with": [99]}, headers=H).status_code == 400)
+        m = c.get("/api/money").json()
+        me = next(b for b in m["balances"] if b["member_id"] == 2)
+        check("overview: my net, transfers, expenses", me["net_cents"] == 4000 - 1500 and m["transfers"]
+              and m["expenses"][0]["can_delete"] is True)
+        r = c.post("/api/settlements", json={"to_member": 2, "amount": "15", "from_member": 1}, headers=H)
+        check("record a payment I received", r.status_code == 200)
+        r = c.post("/api/settlements", json={"to_member": 1, "amount": "5", "from_member": 3}, headers=H)
+        check("can't record a payment between two other people", r.status_code == 403)
+        check("can't delete someone else's expense",
+              asyncio.run(fake.add_expense("theirs", 100, 3, 3, date.today(), {3: 100})) and
+              c.delete(f"/api/expenses/{fake.expenses[-1]['id']}", headers=H).status_code == 404)
+        check("delete my expense", c.delete(f"/api/expenses/{fake.expenses[0]['id']}", headers=H).status_code == 200)
+        check("money needs a session", TestClient(app_main.app, base_url="https://testserver")
+              .get("/api/money").status_code == 401)
+    finally:
+        telegram.send_message = real_send
+        settings.session_pepper = None
+        fake.expenses.clear()
+        fake.settlements.clear()
 
 
 def test_tts_model_routing():
@@ -1844,6 +2120,9 @@ async def main():
     await test_notify_deliver()
     await test_scheduler()
     await test_briefing_build()
+    test_money_math()
+    await test_money_tools()
+    await test_travel_mode()
     print(f"\n{passed} passed, {failed} failed")
 
 
@@ -1855,5 +2134,6 @@ if __name__ == "__main__":
     test_config_strips_whitespace()
     test_web_app()
     test_web_today()
+    test_web_money()
     print(f"\nTOTAL: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

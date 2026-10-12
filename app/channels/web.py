@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from app import auth, briefing, calendar_svc, db, notify, prayer, push, stt, tts, turn
+from app import auth, briefing, calendar_svc, db, location, money, notify, prayer, push, stt, tts, turn
 from app.config import settings
 from app.tools import TimeError_, event_when, read_calendar, resolve_until
 
@@ -263,6 +263,7 @@ class StatusIn(BaseModel):
     text: str = Field(min_length=1, max_length=80)
     until_day: str | None = Field(default=None, max_length=40)
     until_time: str | None = Field(default=None, max_length=10)
+    place: str | None = Field(default=None, max_length=80)   # travel mode
 
 
 class PrefsIn(BaseModel):
@@ -276,13 +277,17 @@ async def today(member=Depends(current_member)):
     tz = ZoneInfo(settings.timezone)
     now = datetime.now(tz)
     statuses = [{"member_id": s["member_id"], "name": s["name"], "text": s["text"],
-                 "until": s["until_at"].isoformat() if s["until_at"] else None}
+                 "until": s["until_at"].isoformat() if s["until_at"] else None,
+                 "place": s.get("place")}
                 for s in await db.current_statuses()]
     prayers = None
-    if prayer.is_configured():
-        times = prayer.times_for(now.date())
-        upcoming = [n for n in prayer.PRAYERS if times[n] > now]
+    loc = await location.location_for(member["id"])
+    if prayer.is_configured() and loc is not None:
+        local = datetime.now(ZoneInfo(loc.tz))      # travel mode: their place, their clock
+        times = prayer.times_at(local.date(), loc)
+        upcoming = [n for n in prayer.PRAYERS if times[n] > local]
         prayers = {"next": upcoming[0] if upcoming else None,
+                   "place": None if loc.is_home else loc.label,
                    "times": [{"name": n, "ar": prayer.NAMES[n][0], "en": prayer.NAMES[n][1],
                               "at": times[n].isoformat(), "label": prayer.clock12(times[n])}
                              for n in prayer.ORDER]}
@@ -304,8 +309,17 @@ async def set_status(body: StatusIn, member=Depends(current_member)):
         until = resolve_until(body.until_day, body.until_time)
     except TimeError_ as e:
         raise HTTPException(400, str(e))
-    await db.set_status(member["id"], body.text.strip(), until)
-    return {"ok": True}
+    place = None
+    if body.place and body.place.strip():
+        try:
+            place = await location.geocode(body.place)
+        except location.PlaceNotFound as e:
+            raise HTTPException(400, str(e))
+        except Exception:
+            log.exception("geocoding failed")
+            raise HTTPException(502, "couldn't look up that place right now; try again")
+    await db.set_status(member["id"], body.text.strip(), until, place)
+    return {"ok": True, "place": place["label"] if place else None}
 
 
 @router.delete("/status", dependencies=[Depends(same_origin)])
@@ -334,6 +348,95 @@ async def update_prefs(body: PrefsIn, member=Depends(current_member)):
         raise HTTPException(400, "nothing to change")
     saved = await db.set_member_prefs(member["id"], updates)
     return {"prefs": {**notify.PREF_DEFAULTS, **saved}}
+
+
+# --- money ---------------------------------------------------------------------------
+
+class ExpenseIn(BaseModel):
+    description: str = Field(min_length=1, max_length=120)
+    amount: str = Field(min_length=1, max_length=20)
+    paid_by: int | None = None                       # member id; default: me
+    split_with: list[int] | None = None              # member ids; default: everyone
+
+
+class SettlementIn(BaseModel):
+    to_member: int
+    amount: str = Field(min_length=1, max_length=20)
+    from_member: int | None = None                   # default: me
+
+
+@router.get("/money")
+async def money_overview(member=Depends(current_member)):
+    members = await db.all_members()
+    names = {m["id"]: m["name"] for m in members}
+    expenses, shares, settlements = await db.money_ledger()
+    net = money.balances(list(names), expenses, shares, settlements)
+    return {
+        "me": member["id"],
+        "members": [{"id": m["id"], "name": m["name"]} for m in members],
+        "balances": [{"member_id": m, "name": names[m], "net_cents": v} for m, v in net.items()],
+        "transfers": [{"from_member": f, "from_name": names[f], "to_member": t, "to_name": names[t],
+                       "cents": c} for f, t, c in money.settle_up(net)],
+        "expenses": [{**{k: e[k] for k in ("id", "description", "amount_cents", "paid_by", "paid_by_name",
+                                           "created_by")},
+                      "spent_on": e["spent_on"].isoformat(), "shares": e["shares"],
+                      "can_delete": member["id"] in (e["paid_by"], e["created_by"])}
+                     for e in await db.recent_expenses(30)],
+        "payments": [{"id": t["id"], "from_name": t["from_name"], "to_name": t["to_name"],
+                      "cents": t["amount_cents"], "settled_on": t["settled_on"].isoformat(),
+                      "can_delete": member["id"] in (t["from_member"], t["to_member"], t["created_by"])}
+                     for t in await db.recent_settlements(10)],
+    }
+
+
+@router.post("/expenses", dependencies=[Depends(same_origin)])
+async def expense_add(body: ExpenseIn, member=Depends(current_member)):
+    ids = {m["id"] for m in await db.all_members()}
+    payer = body.paid_by or member["id"]
+    among = body.split_with if body.split_with else sorted(ids)
+    if payer not in ids or any(m not in ids for m in among):
+        raise HTTPException(400, "unknown roommate")
+    try:
+        amount = money.parse_amount(body.amount)
+        shares = money.split(amount, among)
+    except money.MoneyError as e:
+        raise HTTPException(400, str(e))
+    today = datetime.now(ZoneInfo(settings.timezone)).date()
+    eid = await db.add_expense(body.description.strip(), amount, payer, member["id"], today, shares)
+    return {"id": eid, "shares": shares}
+
+
+@router.delete("/expenses/{expense_id}", dependencies=[Depends(same_origin)])
+async def expense_delete(expense_id: int, member=Depends(current_member)):
+    if await db.delete_expense(expense_id, member["id"]) is None:
+        raise HTTPException(404, "no expense you paid or recorded with that id")
+    return {"ok": True}
+
+
+@router.post("/settlements", dependencies=[Depends(same_origin)])
+async def settlement_add(body: SettlementIn, member=Depends(current_member)):
+    ids = {m["id"] for m in await db.all_members()}
+    frm = body.from_member or member["id"]
+    if frm not in ids or body.to_member not in ids:
+        raise HTTPException(400, "unknown roommate")
+    if frm == body.to_member:
+        raise HTTPException(400, "a payment needs two different people")
+    if member["id"] not in (frm, body.to_member):
+        raise HTTPException(403, "you can only record payments you sent or received")
+    try:
+        amount = money.parse_amount(body.amount)
+    except money.MoneyError as e:
+        raise HTTPException(400, str(e))
+    sid = await db.add_settlement(frm, body.to_member, amount, member["id"],
+                                  datetime.now(ZoneInfo(settings.timezone)).date())
+    return {"id": sid}
+
+
+@router.delete("/settlements/{settlement_id}", dependencies=[Depends(same_origin)])
+async def settlement_delete(settlement_id: int, member=Depends(current_member)):
+    if not await db.delete_settlement(settlement_id, member["id"]):
+        raise HTTPException(404, "no payment of yours with that id")
+    return {"ok": True}
 
 
 # --- push ------------------------------------------------------------------------

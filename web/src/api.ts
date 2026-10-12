@@ -54,6 +54,7 @@ export interface Status {
   name: string;
   text: string;
   until: string | null;
+  place: string | null;
 }
 
 export interface PrayerTime {
@@ -73,7 +74,7 @@ export interface Reminder {
 
 export interface Today {
   statuses: Status[];
-  prayers: { next: string | null; times: PrayerTime[] } | null;
+  prayers: { next: string | null; place: string | null; times: PrayerTime[] } | null;
   reminders: Reminder[];
 }
 
@@ -91,11 +92,31 @@ export interface Briefing {
     low: number;
     rain: number | null;
   } | null;
+  place: string | null;
   events: { summary: string; time: string | null }[];
   calendar_ok: boolean;
+  money: { net: number; transfers: { direction: "pay" | "receive"; name: string; cents: number }[] };
   waiting: string[];
   arriving: string[];
   groceries: number;
+}
+
+export interface MoneyOverview {
+  me: number;
+  members: { id: number; name: string }[];
+  balances: { member_id: number; name: string; net_cents: number }[];
+  transfers: { from_member: number; from_name: string; to_member: number; to_name: string; cents: number }[];
+  expenses: {
+    id: number;
+    description: string;
+    amount_cents: number;
+    paid_by: number;
+    paid_by_name: string;
+    spent_on: string;
+    shares: { member_id: number; name: string; share_cents: number }[];
+    can_delete: boolean;
+  }[];
+  payments: { id: number; from_name: string; to_name: string; cents: number; settled_on: string; can_delete: boolean }[];
 }
 
 export interface Prefs {
@@ -183,12 +204,20 @@ export const api = {
 
   today: () => request<Today>("GET", "/api/today"),
   briefing: () => request<Briefing>("GET", "/api/briefing"),
-  setStatus: (text: string, until_time?: string) =>
-    request<{ ok: true }>("PUT", "/api/status", { text, until_time }),
+  setStatus: (text: string, until_time?: string, place?: string) =>
+    request<{ ok: true; place: string | null }>("PUT", "/api/status", { text, until_time, place }),
   clearStatus: () => request<{ ok: true }>("DELETE", "/api/status"),
   cancelReminder: (id: number) => request<{ ok: true }>("DELETE", `/api/reminders/${id}`),
   prefs: () => request<{ prefs: Prefs }>("GET", "/api/me/prefs"),
   updatePrefs: (p: Partial<Prefs>) => request<{ prefs: Prefs }>("PATCH", "/api/me/prefs", p),
+
+  money: () => request<MoneyOverview>("GET", "/api/money"),
+  addExpense: (e: { description: string; amount: string; paid_by?: number; split_with?: number[] }) =>
+    request<{ id: number }>("POST", "/api/expenses", e),
+  deleteExpense: (id: number) => request<{ ok: true }>("DELETE", `/api/expenses/${id}`),
+  addSettlement: (p: { to_member: number; amount: string; from_member?: number }) =>
+    request<{ id: number }>("POST", "/api/settlements", p),
+  deleteSettlement: (id: number) => request<{ ok: true }>("DELETE", `/api/settlements/${id}`),
 
   pushKey: () => request<{ key: string | null }>("GET", "/api/push/public-key"),
   pushSubscribe: (sub: PushSubscriptionJSON) => request<{ ok: true }>("POST", "/api/push/subscribe", sub),

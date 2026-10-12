@@ -7,6 +7,7 @@ import { Login } from "./pages/Login";
 import { Chat } from "./pages/Chat";
 import { Lists } from "./pages/Lists";
 import { Today } from "./pages/Today";
+import { Money } from "./pages/Money";
 import { Settings } from "./pages/Settings";
 
 function useToast() {
@@ -72,6 +73,7 @@ export function App() {
             <Route path="/lists" element={<Lists toast={toast.show} />} />
             <Route path="/today" element={<Today me={member} toast={toast.show} />} />
             <Route path="/calendar" element={<Navigate to="/today" replace />} />
+            <Route path="/money" element={<Money toast={toast.show} />} />
             <Route path="/settings" element={<Settings me={member} onLoggedOut={loggedOut} toast={toast.show} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

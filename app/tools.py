@@ -283,12 +283,15 @@ TOOLS = [
         "name": "set_status",
         "description": (
             "Set the speaker's status so the suite knows, e.g. 'in a midterm', 'studying, quiet "
-            "please', 'away in Toronto'. Optional end: until_day and/or until_time (HH:MM) as said."
+            "please', 'away in Montreal'. Optional end: until_day and/or until_time (HH:MM) as said. "
+            "If they're away in another city, pass it as `place`: until the status ends, their "
+            "prayer times and briefing weather follow that city (travel mode)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "text": {"type": "string", "description": "The status, short."},
+                "place": {"type": "string", "description": "A city if they're travelling, e.g. 'Montreal' (optional)."},
                 "until_day": {"type": "string", "description": "When it ends, the day as said (optional)."},
                 "until_time": {"type": "string", "description": "When it ends, HH:MM 24h (optional)."},
             },
@@ -316,6 +319,68 @@ TOOLS = [
             "roommates' statuses, and remaining prayer times. Use for 'what's my day look like?'."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "add_expense",
+        "description": (
+            "Record a shared expense, e.g. 'I paid $42 for groceries'. Split equally with everyone "
+            "by default; use split_with to name exactly who shares it, or exclude to leave people "
+            "out. Only call AFTER reading back the amount, payer, and split once and getting a yes. "
+            "Never compute shares yourself: the result has them."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "description": "What it was for, short."},
+                "amount": {"type": "string", "description": "The total, e.g. '42.50' (dollars)."},
+                "paid_by": {"type": "string", "description": "Who paid (a roommate's name). Omit if the speaker paid."},
+                "split_with": {"type": "array", "items": {"type": "string"},
+                               "description": "Exactly who shares it (names; include the payer if they share). Omit for everyone."},
+                "exclude": {"type": "array", "items": {"type": "string"},
+                            "description": "People to leave out of an everyone-split (names)."},
+                "day": {"type": "string", "description": "When it was spent, as said (default today)."},
+            },
+            "required": ["description", "amount"],
+        },
+    },
+    {
+        "name": "get_balances",
+        "description": "Who owes whom in the suite right now, and the fewest payments to settle up.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "record_payment",
+        "description": (
+            "Record money paid between roommates outside an expense, e.g. 'I paid Mo back $20' "
+            "(settling up). Confirm once before calling."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Who received the money."},
+                "amount": {"type": "string", "description": "e.g. '20' or '12.50'."},
+                "from": {"type": "string", "description": "Who paid it. Omit if the speaker paid."},
+            },
+            "required": ["to", "amount"],
+        },
+    },
+    {
+        "name": "list_expenses",
+        "description": "Recent shared expenses with ids, amounts, who paid, and the split.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "description": "How many (default 10)."}},
+            "required": [],
+        },
+    },
+    {
+        "name": "delete_expense",
+        "description": "Delete a mistaken expense by its id from list_expenses (only whoever paid or recorded it).",
+        "input_schema": {
+            "type": "object",
+            "properties": {"expense_id": {"type": "integer"}},
+            "required": ["expense_id"],
+        },
     },
     {
         "name": "add_package",
@@ -436,6 +501,83 @@ def resolve_until(day: str | None = None, time: str | None = None,
 
 def _when(dt: datetime) -> str:
     return dt.astimezone(ZoneInfo(settings.timezone)).strftime("%A %d %B at %H:%M")
+
+
+async def _money_tool(name: str, tool_input: dict, member_id: int | None) -> str:
+    from app import money
+
+    async def who(person: str | None, default=member_id):
+        if not person:
+            return default
+        mid = await db.get_member_id_by_name(person)
+        if mid is None:
+            raise money.MoneyError(f"nobody in the suite is called '{person}'")
+        return mid
+
+    names = {m["id"]: m["name"] for m in await db.all_members()}
+    try:
+        if name == "add_expense":
+            amount = money.parse_amount(tool_input["amount"])
+            payer = await who(tool_input.get("paid_by"))
+            if payer is None:
+                return "ERROR: couldn't tell who paid. Ask the user."
+            if tool_input.get("split_with"):
+                among = [await who(n) for n in tool_input["split_with"]]
+            else:
+                among = list(names)
+            for n in tool_input.get("exclude") or []:
+                ex = await who(n)
+                among = [m for m in among if m != ex]
+            shares = money.split(amount, among)
+            try:
+                day = calendar_svc.resolve_date(tool_input.get("day") or "today")
+            except ValueError:
+                return f"ERROR: couldn't understand the day '{tool_input.get('day')}'. Ask the user."
+            eid = await db.add_expense(tool_input["description"].strip(), amount, payer, member_id, day, shares)
+            parts = ", ".join(f"{names[m]} {money.fmt(c)}" for m, c in shares.items())
+            return (f"Recorded expense #{eid}: {tool_input['description'].strip()}, {money.fmt(amount)} "
+                    f"paid by {names[payer]}, split: {parts}.")
+
+        if name == "record_payment":
+            amount = money.parse_amount(tool_input["amount"])
+            frm = await who(tool_input.get("from"))
+            to = await who(tool_input["to"], default=None)
+            if frm is None or to is None:
+                return "ERROR: couldn't tell who paid whom. Ask the user."
+            if frm == to:
+                return "ERROR: a payment needs two different people."
+            sid = await db.add_settlement(frm, to, amount, member_id,
+                                          datetime.now(ZoneInfo(settings.timezone)).date())
+            return f"Recorded payment #{sid}: {names[frm]} paid {names[to]} {money.fmt(amount)}."
+    except money.MoneyError as e:
+        return f"ERROR: {e}. Ask the user; do NOT guess."
+
+    if name == "get_balances":
+        expenses, shares, settlements = await db.money_ledger()
+        net = money.balances(list(names), expenses, shares, settlements)
+        lines = [f"- {names[m]}: " + ("all square" if v == 0 else
+                                       f"is owed {money.fmt(v)}" if v > 0 else f"owes {money.fmt(v)}")
+                 for m, v in net.items()]
+        plan = money.settle_up(net)
+        lines.append("To settle up: " + ("; ".join(f"{names[f]} pays {names[t]} {money.fmt(c)}"
+                                                   for f, t, c in plan) if plan else "nothing to do."))
+        return "\n".join(lines)
+
+    if name == "list_expenses":
+        rows = await db.recent_expenses(int(tool_input.get("limit") or 10))
+        if not rows:
+            return "No expenses recorded yet."
+        return "\n".join(
+            f"- #{r['id']} {r['spent_on'].strftime('%a %d %b')}: {r['description']}, {money.fmt(r['amount_cents'])} "
+            f"paid by {r['paid_by_name']}, split {', '.join(s['name'] for s in r['shares'])}" for r in rows)
+
+    if name == "delete_expense":
+        desc = await db.delete_expense(tool_input["expense_id"], member_id)
+        if desc is None:
+            return (f"ERROR: no expense #{tool_input['expense_id']} that this person paid or recorded. "
+                    f"Do NOT claim it was deleted; call list_expenses for real ids.")
+        return f"Deleted expense #{tool_input['expense_id']} ({desc})."
+    return f"Unknown tool: {name}"
 
 
 def _package_line(r) -> str:
@@ -693,8 +835,22 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
             until = resolve_until(tool_input.get("until_day"), tool_input.get("until_time"))
         except TimeError_ as e:
             return f"ERROR: {e}. Ask the user."
-        await db.set_status(member_id, tool_input["text"].strip(), until)
-        return f"Status set: '{tool_input['text'].strip()}'" + (f" until {_when(until)}." if until else " (until cleared).")
+        place = None
+        if tool_input.get("place"):
+            from app import location
+            try:
+                place = await location.geocode(tool_input["place"])
+            except location.PlaceNotFound as e:
+                return f"ERROR: {e}. Ask which city they mean."
+            except Exception:
+                log.exception("geocoding failed")
+                return "ERROR: couldn't look up that place right now. Set the status without it or try again."
+        await db.set_status(member_id, tool_input["text"].strip(), until, place)
+        out = f"Status set: '{tool_input['text'].strip()}'" + (f" until {_when(until)}." if until else " (until cleared).")
+        if place:
+            out += (f" Travel mode: {place['label']}. Their prayer times and briefing weather follow "
+                    f"it until the status ends. Confirm the city with them.")
+        return out
 
     if name == "clear_status":
         if member_id is None:
@@ -702,14 +858,19 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
         return "Status cleared." if await db.clear_status(member_id) else "There was no status to clear."
 
     if name == "get_prayer_times":
-        from app import prayer
+        from app import location, prayer
         if not prayer.is_configured():
             return "Prayer times aren't set up (the home location is missing)."
         try:
             day = calendar_svc.resolve_date(tool_input.get("day") or "today")
         except ValueError:
             return f"ERROR: couldn't understand the day '{tool_input.get('day')}'. Ask which day."
-        return f"Prayer times for {day.strftime('%A %d %B')}:\n{prayer.describe_day(day)}"
+        loc = await location.location_for(member_id) if member_id else location.home()
+        where = "" if loc is None or loc.is_home else f" in {loc.label} (the speaker's travel location)"
+        return f"Prayer times{where} for {day.strftime('%A %d %B')}:\n{prayer.describe_day(day, loc)}"
+
+    if name in ("add_expense", "get_balances", "record_payment", "list_expenses", "delete_expense"):
+        return await _money_tool(name, tool_input, member_id)
 
     if name == "get_briefing":
         from app import briefing   # imported here: briefing imports this module

@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from app import briefing, db, notify, prayer
+from app import briefing, db, location, notify, prayer
 from app.config import settings
 
 log = logging.getLogger("abdo")
@@ -49,18 +49,21 @@ async def send_due_reminders(now: datetime) -> int:
     return sent
 
 
-async def send_briefings(members, local: datetime) -> int:
+async def send_briefings(members, now: datetime, locations: dict) -> int:
     sent = 0
     for m in members:
         p = notify.prefs_of(m)
         if not p["briefing"]:
             continue
+        # 8:00 where the member is (travel mode), not necessarily where the suite is.
+        loc = locations.get(m["id"])
+        local = now.astimezone(ZoneInfo(loc.tz if loc else settings.timezone))
         if not (_parse_hhmm(p["briefing_time"]) <= local.time() < BRIEFING_CUTOFF):
             continue
         if not await db.claim_daily(m["id"], "briefing", local.date()):
             continue
         try:
-            title, body = await briefing.build(m, local)
+            title, body = await briefing.build(m, now)
             await notify.deliver(m, title, body, url="/today")
             sent += 1
         except Exception:
@@ -68,47 +71,55 @@ async def send_briefings(members, local: datetime) -> int:
     return sent
 
 
-async def send_prayers(members, local: datetime) -> int:
+async def send_prayers(members, now: datetime, locations: dict) -> int:
+    """Members are grouped by where they are (home, or a travel place), and each group's
+    prayer times are computed for that place, in that place's timezone and local day."""
     if not prayer.is_configured():
         return 0
+    groups: dict = {}
+    for m in members:
+        loc = locations.get(m["id"])
+        if loc is not None and notify.prefs_of(m)["prayers"]:
+            groups.setdefault(loc, []).append(m)
     sent = 0
-    times = prayer.times_for(local.date())
-    for name in prayer.PRAYERS:
-        at = times[name]
-        if not (at <= local < at + PRAYER_WINDOW):
-            continue
-        ar, en = prayer.NAMES[name]
-        for m in members:
-            if not notify.prefs_of(m)["prayers"]:
+    for loc, group in groups.items():
+        local = now.astimezone(ZoneInfo(loc.tz))
+        times = prayer.times_at(local.date(), loc)
+        where = "" if loc.is_home else f" in {loc.label}"
+        for name in prayer.PRAYERS:
+            at = times[name]
+            if not (at <= local < at + PRAYER_WINDOW):
                 continue
-            if not await db.claim_daily(m["id"], f"prayer:{name}", local.date()):
-                continue
-            try:
-                # Fajr never makes a sound: people wake to their own alarms.
-                await notify.deliver(m, f"{en} ({ar})", f"It's {en} time: {prayer.clock12(at)}",
-                                     url="/today", silent=(name == "fajr"))
-                sent += 1
-            except Exception:
-                log.exception("prayer %s for member %s failed", name, m["id"])
+            ar, en = prayer.NAMES[name]
+            for m in group:
+                if not await db.claim_daily(m["id"], f"prayer:{name}", local.date()):
+                    continue
+                try:
+                    # Fajr never makes a sound: people wake to their own alarms.
+                    await notify.deliver(m, f"{en} ({ar})", f"It's {en} time{where}: {prayer.clock12(at)}",
+                                         url="/today", silent=(name == "fajr"))
+                    sent += 1
+                except Exception:
+                    log.exception("prayer %s for member %s failed", name, m["id"])
     return sent
 
 
 async def tick(now: datetime | None = None) -> None:
     """One pass. Each part is isolated so one failure never blocks the others."""
     now = now or datetime.now(timezone.utc)
-    local = now.astimezone(ZoneInfo(settings.timezone))
     try:
         await send_due_reminders(now)
     except Exception:
         log.exception("scheduler: reminders step failed")
     try:
         members = await db.all_members()
+        locations = await location.all_locations(members)
     except Exception:
-        log.exception("scheduler: couldn't load members")
+        log.exception("scheduler: couldn't load members/locations")
         return
     for step in (send_briefings, send_prayers):
         try:
-            await step(members, local)
+            await step(members, now, locations)
         except Exception:
             log.exception("scheduler: %s failed", step.__name__)
 

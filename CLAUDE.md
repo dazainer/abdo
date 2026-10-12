@@ -50,6 +50,7 @@ Claude.
 ```
 app/  → main.py (app setup, GET /api/health version, serves web/dist as an SPA, starts the
         scheduler), scheduler.py + notify.py + briefing.py + prayer.py (proactive Abdo),
+        money.py (cents math) + location.py (travel mode),
         channels/telegram.py (webhook adapter), channels/web.py (/api for the web app),
         auth.py (Telegram-code login + sessions), push.py (web push), turn.py
         (handle_turn), brain.py (tool loop), prompts.py (static persona + dynamic context),
@@ -146,6 +147,15 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   two instances, so never deliver without claiming first. Prayers send only within 20 min of
   their time; a briefing missed by noon is skipped (never send stale). Everything goes through
   `notify.deliver()`: push if it lands, else Telegram, never both. Fajr is silent.
+- **Money is integer cents end to end** (`app/money.py`): `Decimal` parsing, exact equal splits
+  (remainder cents to the lowest ids), balances that sum to zero, fewest-transfers settle-up.
+  The model never does money arithmetic; tools return shares/balances. Deletes are soft and
+  only by the payer/recorder (payments: by someone involved).
+- **Travel mode** (`app/location.py`): a status may carry a geocoded place (Open-Meteo
+  geocoding). While it's unexpired, that member's prayers (scheduler groups members by
+  location, each computed in its own timezone), Today prayer times, briefing weather, and
+  `get_prayer_times` use the place. Everyone else stays home. `location_for()` is the single
+  source of truth.
 - **`where_is` returns location AND status** (computed in code): the model once ignored a
   status in its context and answered "where's Zain?" with "not sharing location".
 - **Prayer times are computed locally** (`prayer.py`, adhanpy, ISNA + standard Asr via
@@ -212,5 +222,6 @@ The full plan, decisions log, and later-phase outlines are in `docs/ROADMAP.md`.
 - **Phase 6 (done, deployed 2026-10-11)** → `docs/abdo_phase6_webapp_spec.md`: web app (React
   PWA), Telegram-code login, shared DM thread, push infrastructure, Dockerfile.
 - **Phase 7a (current: deployed 2026-10-12; briefing card added after the first live briefing)** → `docs/abdo_phase7a_proactive_spec.md`:
-  scheduler, reminders/timers, morning briefing, prayer-time notifications, statuses, Today tab. **Phase 7b** → expenses, timetables, deadlines, groceries+, polls, buses. **Phase 8** → always-on room
+  scheduler, reminders/timers, morning briefing, prayer-time notifications, statuses, Today tab. **Phase 7b** (`docs/abdo_phase7b_spec.md`, four parts): **7b.1 money + travel mode (current:
+  built, awaiting deploy)**, 7b.2 timetables + exams, 7b.3 groceries+ + polls, 7b.4 buses. **Phase 8** → always-on room
   device (wake word, speaker ID; prove on a Mac before buying hardware). Specs written when each starts.

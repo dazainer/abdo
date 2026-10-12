@@ -270,15 +270,117 @@ async def claim_daily(member_id: int, kind: str, local_date) -> bool:
     return row is not None
 
 
+# --- money -----------------------------------------------------------------------
+
+async def add_expense(description: str, amount_cents: int, paid_by: int, created_by,
+                      spent_on, shares: dict[int, int]) -> int:
+    """Insert an expense and its shares atomically. Returns the expense id."""
+    async with _pool.acquire() as con:
+        async with con.transaction():
+            eid = await con.fetchval(
+                "INSERT INTO expenses (description, amount_cents, paid_by, created_by, spent_on) "
+                "VALUES ($1, $2, $3, $4, $5) RETURNING id",
+                description, amount_cents, paid_by, created_by, spent_on,
+            )
+            await con.executemany(
+                "INSERT INTO expense_shares (expense_id, member_id, share_cents) VALUES ($1, $2, $3)",
+                [(eid, m, c) for m, c in shares.items()],
+            )
+    return eid
+
+
+async def add_settlement(from_member: int, to_member: int, amount_cents: int, created_by,
+                         settled_on) -> int:
+    async with _pool.acquire() as con:
+        return await con.fetchval(
+            "INSERT INTO settlements (from_member, to_member, amount_cents, created_by, settled_on) "
+            "VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            from_member, to_member, amount_cents, created_by, settled_on,
+        )
+
+
+async def money_ledger():
+    """Everything balances need (non-deleted): (expenses, shares, settlements)."""
+    async with _pool.acquire() as con:
+        expenses = await con.fetch("SELECT id, paid_by, amount_cents FROM expenses WHERE NOT deleted")
+        shares = await con.fetch(
+            "SELECT s.member_id, s.share_cents FROM expense_shares s "
+            "JOIN expenses e ON e.id = s.expense_id WHERE NOT e.deleted")
+        settlements = await con.fetch(
+            "SELECT from_member, to_member, amount_cents FROM settlements WHERE NOT deleted")
+    return expenses, shares, settlements
+
+
+async def recent_expenses(limit: int = 20):
+    """Newest first, with payer name and the split as [{member_id, name, share_cents}]."""
+    async with _pool.acquire() as con:
+        rows = await con.fetch(
+            "SELECT e.id, e.description, e.amount_cents, e.paid_by, e.created_by, e.spent_on, "
+            "       m.name AS paid_by_name "
+            "FROM expenses e JOIN members m ON m.id = e.paid_by "
+            "WHERE NOT e.deleted ORDER BY e.spent_on DESC, e.id DESC LIMIT $1",
+            limit,
+        )
+        ids = [r["id"] for r in rows]
+        shares = await con.fetch(
+            "SELECT s.expense_id, s.member_id, s.share_cents, m.name FROM expense_shares s "
+            "JOIN members m ON m.id = s.member_id WHERE s.expense_id = ANY($1::bigint[]) "
+            "ORDER BY m.id", ids,
+        ) if ids else []
+    by_expense: dict[int, list] = {}
+    for s in shares:
+        by_expense.setdefault(s["expense_id"], []).append(
+            {"member_id": s["member_id"], "name": s["name"], "share_cents": s["share_cents"]})
+    return [{**dict(r), "shares": by_expense.get(r["id"], [])} for r in rows]
+
+
+async def recent_settlements(limit: int = 20):
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT t.id, t.from_member, t.to_member, t.amount_cents, t.created_by, t.settled_on, "
+            "       f.name AS from_name, o.name AS to_name "
+            "FROM settlements t JOIN members f ON f.id = t.from_member "
+            "JOIN members o ON o.id = t.to_member "
+            "WHERE NOT t.deleted ORDER BY t.settled_on DESC, t.id DESC LIMIT $1",
+            limit,
+        )
+
+
+async def delete_expense(expense_id: int, member_id: int):
+    """Soft-delete, only by whoever paid or recorded it. Returns the description, or None."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "UPDATE expenses SET deleted = true WHERE id = $1 AND NOT deleted "
+            "AND (paid_by = $2 OR created_by = $2) RETURNING description",
+            expense_id, member_id,
+        )
+    return row["description"] if row else None
+
+
+async def delete_settlement(settlement_id: int, member_id: int) -> bool:
+    """Soft-delete a payment, only by someone involved in it or who recorded it."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "UPDATE settlements SET deleted = true WHERE id = $1 AND NOT deleted "
+            "AND (from_member = $2 OR to_member = $2 OR created_by = $2) RETURNING id",
+            settlement_id, member_id,
+        )
+    return row is not None
+
+
 # --- status ----------------------------------------------------------------------
 
-async def set_status(member_id: int, text: str, until_at) -> None:
+async def set_status(member_id: int, text: str, until_at, place: dict | None = None) -> None:
+    """place: {"label", "lat", "lng", "tz"} from the geocoder (travel mode), or None."""
+    p = place or {}
     async with _pool.acquire() as con:
         await con.execute(
-            "INSERT INTO member_status (member_id, text, until_at, updated_at) "
-            "VALUES ($1, $2, $3, now()) "
-            "ON CONFLICT (member_id) DO UPDATE SET text = $2, until_at = $3, updated_at = now()",
-            member_id, text, until_at,
+            "INSERT INTO member_status (member_id, text, until_at, updated_at, place, place_lat, "
+            "                           place_lng, place_tz) "
+            "VALUES ($1, $2, $3, now(), $4, $5, $6, $7) "
+            "ON CONFLICT (member_id) DO UPDATE SET text = $2, until_at = $3, updated_at = now(), "
+            "    place = $4, place_lat = $5, place_lng = $6, place_tz = $7",
+            member_id, text, until_at, p.get("label"), p.get("lat"), p.get("lng"), p.get("tz"),
         )
 
 
@@ -292,7 +394,8 @@ async def current_statuses():
     """Unexpired statuses, with names."""
     async with _pool.acquire() as con:
         return await con.fetch(
-            "SELECT s.member_id, m.name, s.text, s.until_at, s.updated_at "
+            "SELECT s.member_id, m.name, s.text, s.until_at, s.updated_at, "
+            "       s.place, s.place_lat, s.place_lng, s.place_tz "
             "FROM member_status s JOIN members m ON m.id = s.member_id "
             "WHERE s.until_at IS NULL OR s.until_at > now() ORDER BY m.id"
         )

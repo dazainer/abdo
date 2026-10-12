@@ -78,8 +78,18 @@ smoke._fake_events[:] = [
 smoke.fake.statuses = {
     2: {"member_id": 2, "name": "Mo", "text": "in a midterm", "updated_at": now,
         "until_at": now + timedelta(hours=2)},
-    3: {"member_id": 3, "name": "Sam", "text": "away till Sunday", "updated_at": now, "until_at": None},
+    3: {"member_id": 3, "name": "Sam", "text": "away till Sunday", "updated_at": now, "until_at": None,
+        "place": "Montreal, Canada", "place_lat": 45.50884, "place_lng": -73.58781, "place_tz": "America/Toronto"},
 }
+smoke.fake.expenses = [
+    {"id": 1, "description": "Walmart groceries", "amount_cents": 8640, "paid_by": 1, "created_by": 1,
+     "spent_on": today - timedelta(days=2), "deleted": False, "shares": {1: 2880, 2: 2880, 3: 2880}},
+    {"id": 2, "description": "Pizza night", "amount_cents": 3600, "paid_by": 2, "created_by": 2,
+     "spent_on": today - timedelta(days=1), "deleted": False, "shares": {1: 1800, 2: 1800}},
+    {"id": 3, "description": "Dish soap + sponges", "amount_cents": 1199, "paid_by": 3, "created_by": 3,
+     "spent_on": today, "deleted": False, "shares": {1: 400, 2: 400, 3: 399}},
+]
+smoke.fake._exp_seq = 3
 smoke.fake.reminders = [
     {"id": 1, "member_id": 1, "text": "switch the laundry", "due_at": now + timedelta(minutes=35),
      "created_by": 1, "done": False},

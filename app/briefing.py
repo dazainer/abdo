@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from app import calendar_svc, db, prayer
+from app import calendar_svc, db, location, money, prayer
 from app.config import settings
 from app.tools import event_when, read_calendar
 
@@ -27,17 +27,18 @@ _WMO = {
     95: "thunderstorms", 96: "thunderstorms with hail", 99: "thunderstorms with hail",
 }
 
-_weather_cache: tuple[float, str | None] | None = None
+# (lat, lng) -> (fetched_at, parsed weather or None). Keyed by place for travel mode.
+_weather_cache: dict[tuple[float, float], tuple[float, dict | None]] = {}
 WEATHER_TTL = 30 * 60
 
 
-async def _fetch_weather() -> dict:
+async def _fetch_weather(lat: float, lng: float, tz: str) -> dict:
     async with httpx.AsyncClient(timeout=8) as client:
         r = await client.get("https://api.open-meteo.com/v1/forecast", params={
-            "latitude": settings.home_lat, "longitude": settings.home_lng,
+            "latitude": lat, "longitude": lng,
             "current": "temperature_2m,apparent_temperature,weather_code",
             "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
-            "timezone": settings.timezone, "forecast_days": 1,
+            "timezone": tz, "forecast_days": 1,
         })
         r.raise_for_status()
         return r.json()
@@ -82,20 +83,38 @@ def weather_text(w: dict) -> str:
     return line + "."
 
 
-async def weather() -> dict | None:
-    """Cached 30 min. None (left out) if home isn't set or the API fails: never invented."""
-    global _weather_cache
-    if settings.home_lat is None or settings.home_lng is None:
+async def weather(loc: "location.Location | None") -> dict | None:
+    """Cached 30 min per place. None (left out) without a place or if the API fails:
+    never invented."""
+    if loc is None:
         return None
-    if _weather_cache and _time.monotonic() - _weather_cache[0] < WEATHER_TTL:
-        return _weather_cache[1]
+    key = (round(loc.lat, 3), round(loc.lng, 3))
+    cached = _weather_cache.get(key)
+    if cached and _time.monotonic() - cached[0] < WEATHER_TTL:
+        return cached[1]
     try:
-        w = parse_weather(await _fetch_weather())
+        w = parse_weather(await _fetch_weather(loc.lat, loc.lng, loc.tz))
     except Exception:
         log.warning("weather fetch failed; briefing goes without it", exc_info=True)
         w = None
-    _weather_cache = (_time.monotonic(), w)
+    _weather_cache[key] = (_time.monotonic(), w)
     return w
+
+
+async def money_for(member_id: int) -> dict:
+    """{"net": cents, "transfers": [{"direction": "pay"|"receive", "name", "cents"}]} for one
+    member, from the suite's fewest-transfers settle-up plan."""
+    expenses, shares, settlements = await db.money_ledger()
+    members = await db.all_members()
+    names = {m["id"]: m["name"] for m in members}
+    net = money.balances(list(names), expenses, shares, settlements)
+    transfers = []
+    for frm, to, cents in money.settle_up(net):
+        if frm == member_id:
+            transfers.append({"direction": "pay", "name": names[to], "cents": cents})
+        elif to == member_id:
+            transfers.append({"direction": "receive", "name": names[frm], "cents": cents})
+    return {"net": net.get(member_id, 0), "transfers": transfers}
 
 
 def greeting(local: datetime) -> str:
@@ -110,7 +129,9 @@ async def gather(member, now: datetime | None = None) -> dict:
     """Everything in the member's briefing for `now`'s local day, as data. The app renders
     this as a card; notifications and Telegram get render_text() of the same data."""
     tz = ZoneInfo(settings.timezone)
-    local = (now or datetime.now(timezone.utc)).astimezone(tz)
+    loc = await location.location_for(member["id"])
+    # The member's own clock: a traveller's "today" and prayer times are where they are.
+    local = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(loc.tz) if loc else tz)
     today = local.date()
 
     events, calendar_ok = [], True
@@ -126,8 +147,8 @@ async def gather(member, now: datetime | None = None) -> dict:
     mine = await db.get_open_packages(member["id"])
     others = [s for s in await db.current_statuses() if s["member_id"] != member["id"]]
     prayers = []
-    if prayer.is_configured():
-        times = prayer.times_for(today)
+    if prayer.is_configured() and loc is not None:
+        times = prayer.times_at(today, loc)
         prayers = [{"name": prayer.NAMES[n][1], "label": prayer.clock12(times[n])}
                    for n in prayer.PRAYERS if times[n] > local]
 
@@ -136,7 +157,8 @@ async def gather(member, now: datetime | None = None) -> dict:
         "name": member["arabic_name"] or member["name"],
         "date": today.isoformat(),
         "day": local.strftime("%A %d %B"),
-        "weather": await weather(),
+        "place": None if loc is None or loc.is_home else loc.label,
+        "weather": await weather(loc),
         "events": events,
         "calendar_ok": calendar_ok,
         "waiting": [p["description"] for p in mine if p["status"] == "arrived"],
@@ -146,6 +168,7 @@ async def gather(member, now: datetime | None = None) -> dict:
                       "until": s["until_at"].astimezone(tz).strftime("%a %H:%M") if s["until_at"] else None}
                      for s in others],
         "prayers": prayers,
+        "money": await money_for(member["id"]),
     }
 
 
@@ -153,6 +176,8 @@ def render_text(b: dict) -> tuple[str, str]:
     """(title, body) for a notification or Telegram message. Lines only when there's
     something to say; a calendar that couldn't be read says so (never "nothing today")."""
     lines: list[str] = []
+    if b["place"]:
+        lines.append(f"In {b['place']} (travel mode): weather and prayer times are for there.")
     if b["weather"]:
         lines.append(weather_text(b["weather"]))
     if not b["calendar_ok"]:
@@ -166,6 +191,10 @@ def render_text(b: dict) -> tuple[str, str]:
         lines.append("Arriving today: " + ", ".join(b["arriving"]))
     if b["groceries"]:
         lines.append(f"Groceries: {b['groceries']} item{'s' if b['groceries'] != 1 else ''} on the list")
+    for t in b["money"]["transfers"]:
+        if t["cents"] >= 100:   # under $1 isn't worth a line
+            lines.append(f"You owe {t['name']} {money.fmt(t['cents'])}" if t["direction"] == "pay"
+                         else f"{t['name']} owes you {money.fmt(t['cents'])}")
     for s in b["statuses"]:
         lines.append(f"{s['name']}: {s['text']}" + (f" until {s['until']}" if s["until"] else ""))
     if b["prayers"]:

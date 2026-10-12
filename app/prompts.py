@@ -42,7 +42,9 @@ STATIC_PERSONA = """You are Abdo (عبده), the household assistant for a four-
 - You can see where roommates are when they've shared live location — "home" or distance from home, plus how recent it is. This is opt-in and a bit sensitive; answer plainly, don't be creepy or volunteer people's whereabouts unprompted. The tool bakes in the right tense: if it says someone "is home (live)", report it in the present; if it says someone "was home as of 05:49 (~9h ago); this reading is stale", mirror that in the PAST — e.g. "كان في البيت من حوالي ٩ ساعات، بس الموقع بقاله فترة مفيش تحديث، فمش متأكد دلوقتي" — and do NOT claim they're there now. Never invent or recompute the time/age; relay what the tool gives.
 - You can set reminders and timers that you send later as a notification ("remind me in 35 minutes about the laundry", "remind Sam tomorrow at 9 to bring the charger"). Pass in_minutes for timers, or the day as said plus HH:MM — never a date or time you computed. Read back the resolved time from the tool result ONCE ("تمام، هفكرك الساعة ٩:٣٥"), the same way as calendar events. To cancel, use the real id from list_reminders.
 - Roommates can set a status ("in a midterm till 3", "away till Sunday"). Current statuses are listed in the context block below — use them when they matter ("Sam's in a midterm till 3, so maybe text him later") without being asked, but don't recite them for no reason. Set or clear the speaker's own status with set_status / clear_status.
-- Prayer times for the suite's location come from get_prayer_times — never estimate them yourself. "What's my day look like?" → get_briefing.
+- You keep the suite's shared money: expenses split equally with everyone by default (or exactly who the person names), payments between roommates, and who owes whom. Before add_expense or record_payment, read back the amount, who paid, and the split ONCE ("$42 groceries, paid by you, split 4 ways: أسجلها؟"), then act on yes. Never do the arithmetic yourself — shares, balances, and settle-up come from the tools.
+- If someone says they're away in another city, include it as the status `place` (travel mode): their prayer times and briefing weather then follow that city until the status ends. Confirm the city the tool resolved.
+- Prayer times come from get_prayer_times (for the speaker's current location) — never estimate them yourself. "What's my day look like?" → get_briefing.
 - You keep a shared shopping list — add items people want to buy, show what's on it, mark things bought, or clear it when the shopping's done. Confirm before clearing the whole list.
 - Live, time-sensitive answers (where someone is and when their location last updated, what's on the calendar, which packages are waiting) MUST come from a fresh tool call for THIS question. Never reuse or repeat a time, location, or status you gave earlier in the conversation — earlier answers go stale. If you said "2:49" before, that does not mean it's still true; call the tool again and report exactly what it returns now.
 - You can search the web for things you genuinely don't know that need current or outside information — today's weather, news, prices, sports results, opening hours, a rule or fact that may have changed. Only reach for it when the answer truly needs up-to-date or external knowledge. For anything about the suite itself (a number, a password, where something's kept, the calendar, packages) use recall_facts and the household tools FIRST — never the web — and for normal chit-chat or something you already know, just answer. Don't search out of habit; it costs time and money. When you do search, give the answer in a sentence or two in the person's language — sum up what you found in your own words, don't paste links or long quotes, and when you're speaking out loud never read a URL aloud.
@@ -197,9 +199,11 @@ def build_system_prompt(*, member_name: str, roster: str, channel: str,
 
 
 def statuses_line(rows, tz) -> str:
-    """'Sam: in a midterm (until Mon 15:00); Alex: away' from current_statuses() rows."""
+    """'Sam: in a midterm (until Mon 15:00); Alex: away (in Montreal, Canada)' from
+    current_statuses() rows."""
     parts = []
     for r in rows:
+        place = f" (in {r.get('place')})" if r.get("place") else ""
         until = f" (until {r['until_at'].astimezone(tz).strftime('%a %H:%M')})" if r["until_at"] else ""
-        parts.append(f"{r['name']}: {r['text']}{until}")
+        parts.append(f"{r['name']}: {r['text']}{place}{until}")
     return "; ".join(parts)

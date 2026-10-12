@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { api, ApiError, type CalendarEvent, type Member } from "../api";
 import { Sign } from "../components/Sign";
 import { Icon } from "../components/Icon";
+import { fmt } from "./Money";
 import { clock, relativeDay, todayISO, dayOf } from "../lib/dates";
 
 export function Today({ me, toast }: { me: Member; toast: (msg: string) => void }) {
@@ -44,12 +45,13 @@ function BriefingCard() {
     ...d.waiting.map((x) => `${x}: waiting at the building`),
     ...d.arriving.map((x) => `${x}: arriving today`),
   ];
-  const quiet = !d.events.length && d.calendar_ok && !forYou.length && !d.groceries;
+  const quiet = !d.events.length && d.calendar_ok && !forYou.length && !d.groceries
+    && !d.money.transfers.some((t) => t.cents >= 100);
 
   return (
     <section className="plate briefing" aria-labelledby="briefing-title">
       <div className="briefing-head">
-        <p className="briefing-day">{d.day}</p>
+        <p className="briefing-day">{d.day}{d.place ? `, in ${d.place}` : ""}</p>
         <h2 className="briefing-title" id="briefing-title" dir="rtl" lang="ar">
           {d.greeting} يا {d.name}
         </h2>
@@ -94,6 +96,19 @@ function BriefingCard() {
             <dd>{forYou.map((x) => <span key={x} className="briefing-line">{x}</span>)}</dd>
           </div>
         )}
+        {d.money.transfers.filter((t) => t.cents >= 100).length > 0 && (
+          <div className="briefing-row">
+            <dt>Money</dt>
+            <dd>
+              {d.money.transfers.filter((t) => t.cents >= 100).map((t) => (
+                <span key={t.name} className="briefing-line">
+                  {t.direction === "pay" ? `You owe ${t.name} ${fmt(t.cents)}` : `${t.name} owes you ${fmt(t.cents)}`}
+                </span>
+              ))}
+              <Link to="/money" className="briefing-link">Settle up</Link>
+            </dd>
+          </div>
+        )}
         {d.groceries > 0 && (
           <div className="briefing-row">
             <dt>Groceries</dt>
@@ -120,6 +135,7 @@ function Around({ me, toast }: { me: Member; toast: (msg: string) => void }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
   const [until, setUntil] = useState("");
+  const [place, setPlace] = useState("");
 
   const statuses = today.data?.statuses ?? [];
   const mine = statuses.find((s) => s.member_id === me.id);
@@ -128,10 +144,12 @@ function Around({ me, toast }: { me: Member; toast: (msg: string) => void }) {
     e.preventDefault();
     if (!text.trim()) return;
     try {
-      await api.setStatus(text.trim(), until || undefined);
+      const res = await api.setStatus(text.trim(), until || undefined, place.trim() || undefined);
+      if (res.place) toast(`Travel mode: ${res.place}. Your prayer times and weather follow you.`);
       setEditing(false);
       setText("");
       setUntil("");
+      setPlace("");
       await qc.invalidateQueries({ queryKey: ["today"] });
     } catch (err) {
       toast(errorText(err, "Couldn't set your status. Try again."));
@@ -158,7 +176,7 @@ function Around({ me, toast }: { me: Member; toast: (msg: string) => void }) {
         {statuses.map((s) => (
           <li className="row" key={s.member_id}>
             <span className="row-main">
-              <span className="row-title"><strong>{s.name}</strong> {s.text}</span>
+              <span className="row-title"><strong>{s.name}</strong> {s.text}{s.place ? ` (in ${s.place})` : ""}</span>
               {s.until && <span className="row-meta">{untilLabel(s.until).trim()}</span>}
             </span>
             {s.member_id === me.id && (
@@ -171,6 +189,8 @@ function Around({ me, toast }: { me: Member; toast: (msg: string) => void }) {
         <form onSubmit={save} style={{ display: "grid", gap: 8, marginTop: 10 }}>
           <input className="field" dir="auto" value={text} onChange={(e) => setText(e.target.value)}
                  placeholder="In a midterm, away, studying…" aria-label="Your status" autoFocus maxLength={80} />
+          <input className="field" dir="auto" value={place} onChange={(e) => setPlace(e.target.value)}
+                 placeholder="Away in another city? (optional)" aria-label="City, if you're away" maxLength={80} />
           <label className="row-meta" htmlFor="until">Until (optional, today)</label>
           <input id="until" className="field" type="time" value={until} onChange={(e) => setUntil(e.target.value)} />
           <div className="inline-form" style={{ margin: 0 }}>
@@ -194,6 +214,7 @@ function Prayers() {
   return (
     <section className="section" aria-labelledby="prayers">
       <h2 className="section-title" id="prayers">Prayer times</h2>
+      {prayers?.place && <p className="section-note">In {prayers.place}, while you're away</p>}
       {!prayers ? (
         <p className="empty">Prayer times need the suite's location set on the server.</p>
       ) : (

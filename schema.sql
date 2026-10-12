@@ -133,7 +133,12 @@ CREATE TABLE member_status (
     member_id   INTEGER PRIMARY KEY REFERENCES members(id),
     text        TEXT NOT NULL,
     until_at    TIMESTAMPTZ,                     -- NULL = until cleared
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Travel mode (7b.1): while the status lasts, this member's prayers/briefing use the place.
+    place       TEXT,                            -- "Montreal, Canada" (from the geocoder)
+    place_lat   DOUBLE PRECISION,
+    place_lng   DOUBLE PRECISION,
+    place_tz    TEXT                             -- IANA timezone of the place
 );
 
 -- Daily sends (briefing, each prayer) are claimed here first: one per member per local day.
@@ -143,4 +148,38 @@ CREATE TABLE sent_log (
     local_date  DATE NOT NULL,
     sent_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (member_id, kind, local_date)
+);
+
+-- ---------- Money (Phase 7b.1; live DBs get these via migrations/phase7b1_money_travel.sql) ----------
+
+-- A shared expense: who paid, how much (integer cents), split into exact shares below.
+CREATE TABLE expenses (
+    id            BIGSERIAL PRIMARY KEY,
+    description   TEXT NOT NULL,
+    amount_cents  INTEGER NOT NULL CHECK (amount_cents > 0),
+    paid_by       INTEGER NOT NULL REFERENCES members(id),
+    created_by    INTEGER REFERENCES members(id),
+    spent_on      DATE NOT NULL,
+    deleted       BOOLEAN NOT NULL DEFAULT false,   -- soft delete keeps history auditable
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE expense_shares (
+    expense_id    BIGINT NOT NULL REFERENCES expenses(id),
+    member_id     INTEGER NOT NULL REFERENCES members(id),
+    share_cents   INTEGER NOT NULL CHECK (share_cents >= 0),
+    PRIMARY KEY (expense_id, member_id)
+);
+
+-- Money moving between roommates outside an expense ("I paid Mo back $20").
+CREATE TABLE settlements (
+    id            BIGSERIAL PRIMARY KEY,
+    from_member   INTEGER NOT NULL REFERENCES members(id),
+    to_member     INTEGER NOT NULL REFERENCES members(id),
+    amount_cents  INTEGER NOT NULL CHECK (amount_cents > 0),
+    created_by    INTEGER REFERENCES members(id),
+    settled_on    DATE NOT NULL,
+    deleted       BOOLEAN NOT NULL DEFAULT false,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (from_member <> to_member)
 );
