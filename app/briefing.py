@@ -6,7 +6,7 @@ couldn't be read never reads as "nothing today".
 """
 import logging
 import time as _time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -144,6 +144,22 @@ async def gather(member, now: datetime | None = None) -> dict:
         except calendar_svc.CalendarReadError:
             calendar_ok = False
 
+    from app import timetable
+    day_start = datetime.combine(today, datetime.min.time(), tz)
+    my_classes = timetable.busy_on(today, await db.classes_for(member["id"]), [], tz)
+    upcoming = await db.exams_between(day_start, day_start + timedelta(days=8))
+
+    def exam_out(e):
+        at = e["starts_at"].astimezone(tz)
+        days = (at.date() - today).days
+        when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
+        return {"name": e["name"], "course": e["course"], "kind": e["kind"], "when": when,
+                "time": at.strftime("%H:%M"), "day": at.strftime("%a %d %b")}
+
+    my_exams = [exam_out(e) for e in upcoming if e["member_id"] == member["id"]]
+    others_exams = [exam_out(e) for e in upcoming if e["member_id"] != member["id"]
+                    and (e["starts_at"].astimezone(tz).date() - today).days <= 1]
+
     mine = await db.get_open_packages(member["id"])
     others = [s for s in await db.current_statuses() if s["member_id"] != member["id"]]
     prayers = []
@@ -161,6 +177,10 @@ async def gather(member, now: datetime | None = None) -> dict:
         "weather": await weather(loc),
         "events": events,
         "calendar_ok": calendar_ok,
+        "classes": [{"what": c.what, "from": c.start.strftime("%H:%M"), "to": c.end.strftime("%H:%M")}
+                    for c in my_classes],
+        "my_exams": my_exams,
+        "others_exams": others_exams,
         "waiting": [p["description"] for p in mine if p["status"] == "arrived"],
         "arriving": [p["description"] for p in mine if p["status"] == "expected" and p["expected_on"] == today],
         "groceries": len(await db.get_shopping_list()),
@@ -185,6 +205,12 @@ def render_text(b: dict) -> tuple[str, str]:
     elif b["events"]:
         lines.append("Today: " + "; ".join(e["summary"] + (f" at {e['time']}" if e["time"] else "")
                                          for e in b["events"]))
+    if b["classes"]:
+        lines.append("Classes: " + ", ".join(f"{c['what']} {c['from']}" for c in b["classes"]))
+    for e in b["my_exams"]:
+        lines.append(f"Your {e['course']} {e['kind']}: {e['when']} ({e['day']} {e['time']})")
+    for e in b["others_exams"]:
+        lines.append(f"{e['name']} has a {e['course']} {e['kind']} {e['when']} at {e['time']}")
     if b["waiting"]:
         lines.append("Waiting for you at the building: " + ", ".join(b["waiting"]))
     if b["arriving"]:

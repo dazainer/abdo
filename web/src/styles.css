@@ -533,6 +533,15 @@ button, input, textarea, select { font: inherit; color: inherit; }
 }
 .chip-toggle.on { background: var(--plate); color: var(--plate-text); border-color: var(--plate); }
 
+/* ---- schedule ------------------------------------------------------------------- */
+
+.steps { margin: 4px 0 12px; padding-inline-start: 20px; }
+.term-row { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin: 8px 0; }
+.term-row .field { min-width: 0; }
+.steps li { margin-bottom: 4px; }
+.paste { min-height: 160px; resize: vertical; font-size: var(--t-small); line-height: 1.4; }
+.free-line { margin: 0; font-family: var(--font-sign); font-size: var(--t-lead); font-weight: 600; font-variant-numeric: tabular-nums; }
+
 /* ---- prayer times: a small enamel timetable, the next prayer lit in gold ---------- */
 
 .prayers {

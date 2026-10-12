@@ -72,7 +72,44 @@ export interface Reminder {
   set_by: string | null;
 }
 
+export interface ProposedClass {
+  course: string;
+  section: string;
+  kind: string;
+  days: string[];
+  start: string;
+  end: string;
+  room: string;
+  start_date: string;
+  end_date: string;
+}
+
+export interface SavedClass {
+  course: string;
+  section: string;
+  kind: string;
+  day: string;
+  start: string;
+  end: string;
+  room: string;
+  term_start: string;
+  term_end: string;
+}
+
+export interface Exam {
+  id: number;
+  member_id: number;
+  name: string;
+  course: string;
+  kind: "quiz" | "midterm" | "final";
+  starts_at: string;
+  ends_at: string | null;
+  room: string | null;
+  can_delete: boolean;
+}
+
 export interface Today {
+  free: { from: string; to: string; together: { from: string; to: string }[]; away: string[]; no_timetable: string[] };
   statuses: Status[];
   prayers: { next: string | null; place: string | null; times: PrayerTime[] } | null;
   reminders: Reminder[];
@@ -96,6 +133,9 @@ export interface Briefing {
   events: { summary: string; time: string | null }[];
   calendar_ok: boolean;
   money: { net: number; transfers: { direction: "pay" | "receive"; name: string; cents: number }[] };
+  classes: { what: string; from: string; to: string }[];
+  my_exams: { course: string; kind: string; when: string; time: string; day: string }[];
+  others_exams: { name: string; course: string; kind: string; when: string; time: string }[];
   waiting: string[];
   arriving: string[];
   groceries: number;
@@ -210,6 +250,16 @@ export const api = {
   cancelReminder: (id: number) => request<{ ok: true }>("DELETE", `/api/reminders/${id}`),
   prefs: () => request<{ prefs: Prefs }>("GET", "/api/me/prefs"),
   updatePrefs: (p: Partial<Prefs>) => request<{ prefs: Prefs }>("PATCH", "/api/me/prefs", p),
+
+  schedule: () => request<{ classes: SavedClass[] }>("GET", "/api/schedule"),
+  extractSchedule: (text: string) =>
+    request<{ classes: ProposedClass[]; term_start: string; term_end: string }>("POST", "/api/schedule/extract", { text }),
+  saveSchedule: (classes: ProposedClass[], term_start: string, term_end: string) =>
+    request<{ saved: number }>("PUT", "/api/schedule", { classes, term_start: term_start || null, term_end: term_end || null }),
+  exams: () => request<{ exams: Exam[] }>("GET", "/api/exams"),
+  addExam: (e: { course: string; kind: string; date: string; time: string; room?: string }) =>
+    request<{ id: number }>("POST", "/api/exams", e),
+  deleteExam: (id: number) => request<{ ok: true }>("DELETE", `/api/exams/${id}`),
 
   money: () => request<MoneyOverview>("GET", "/api/money"),
   addExpense: (e: { description: string; amount: string; paid_by?: number; split_with?: number[] }) =>

@@ -38,6 +38,13 @@ telegram.send_message = print_code
 
 class CannedAbdo:
     async def create(self, **kw):
+        if "format" in (kw.get("output_config") or {}):      # timetable extraction
+            import json
+            return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(
+                type="text", text=json.dumps({"classes": smoke.QUEST_ITEMS + [
+                    {"course": "CS 246", "section": "001", "kind": "LEC", "days": ["Tue", "Thu"],
+                     "start": "13:00", "end": "14:20", "room": "MC 4059",
+                     "start_date": "2026-09-09", "end_date": "2026-12-08"}]}))])
         last = kw["messages"][-1]["content"]
         said = last.split(": ", 1)[-1] if isinstance(last, str) else "…"
         reply = f"تمام يا باشا — you said “{said}”. (Demo mode: no real Abdo here.)"
@@ -90,6 +97,21 @@ smoke.fake.expenses = [
      "spent_on": today, "deleted": False, "shares": {1: 400, 2: 400, 3: 399}},
 ]
 smoke.fake._exp_seq = 3
+from datetime import time as _t
+smoke.fake.classes = [
+    {"member_id": 2, "name": "Mo", "course": "CS 246", "section": "002", "kind": "LAB", "weekday": today.weekday(),
+     "starts": _t(18, 0), "ends": _t(19, 30), "room": "MC 3003", "term_start": today - timedelta(days=30),
+     "term_end": today + timedelta(days=60)},
+]
+smoke.fake.exams = [
+    {"id": 1, "member_id": 2, "name": "Mo", "course": "CS 246", "kind": "midterm", "room": "M3 1006",
+     "starts_at": datetime.combine(today + timedelta(days=1), _t(19, 0), smoke.TZ), "ends_at": None,
+     "created_by": 2, "deleted": False},
+    {"id": 2, "member_id": 1, "name": "Zain", "course": "MATH 136", "kind": "quiz", "room": None,
+     "starts_at": datetime.combine(today + timedelta(days=3), _t(10, 30), smoke.TZ), "ends_at": None,
+     "created_by": 1, "deleted": False},
+]
+smoke.fake._exam_seq = 2
 smoke.fake.reminders = [
     {"id": 1, "member_id": 1, "text": "switch the laundry", "due_at": now + timedelta(minutes=35),
      "created_by": 1, "done": False},

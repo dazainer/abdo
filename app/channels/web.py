@@ -14,13 +14,13 @@ not enabled), so it doubles as CSRF protection alongside SameSite=Lax.
 """
 import base64
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from app import auth, briefing, calendar_svc, db, location, money, notify, prayer, push, stt, tts, turn
+from app import auth, briefing, calendar_svc, db, location, money, notify, prayer, push, stt, timetable, tts, turn
 from app.config import settings
 from app.tools import TimeError_, event_when, read_calendar, resolve_until
 
@@ -291,10 +291,14 @@ async def today(member=Depends(current_member)):
                    "times": [{"name": n, "ar": prayer.NAMES[n][0], "en": prayer.NAMES[n][1],
                               "at": times[n].isoformat(), "label": prayer.clock12(times[n])}
                              for n in prayer.ORDER]}
+    free = await timetable.who_is_free(datetime.now(ZoneInfo(settings.timezone)).date())
     reminders = [{"id": r["id"], "text": r["text"], "due_at": r["due_at"].isoformat(),
                   "set_by": r["created_by_name"] if r["created_by"] not in (None, member["id"]) else None}
                  for r in await db.upcoming_reminders(member["id"])]
-    return {"statuses": statuses, "prayers": prayers, "reminders": reminders}
+    return {"statuses": statuses, "prayers": prayers, "reminders": reminders,
+            "free": {"from": free["from"], "to": free["to"], "together": free["together"],
+                     "away": [p["name"] for p in free["people"] if p["away"]],
+                     "no_timetable": [p["name"] for p in free["people"] if not p["has_timetable"]]}}
 
 
 @router.get("/briefing")
@@ -348,6 +352,125 @@ async def update_prefs(body: PrefsIn, member=Depends(current_member)):
         raise HTTPException(400, "nothing to change")
     saved = await db.set_member_prefs(member["id"], updates)
     return {"prefs": {**notify.PREF_DEFAULTS, **saved}}
+
+
+# --- schedule + exams ----------------------------------------------------------------
+
+class ExtractIn(BaseModel):
+    text: str = Field(min_length=1, max_length=20_000)
+
+
+class ClassIn(BaseModel):
+    course: str = Field(max_length=40)
+    section: str = Field(default="", max_length=20)
+    kind: str = Field(default="", max_length=10)
+    days: list[str]
+    start: str = Field(max_length=5)
+    end: str = Field(max_length=5)
+    room: str = Field(default="", max_length=40)
+    start_date: str = Field(default="", max_length=10)
+    end_date: str = Field(default="", max_length=10)
+
+
+class ScheduleIn(BaseModel):
+    classes: list[ClassIn] = Field(max_length=60)
+    term_start: str | None = None
+    term_end: str | None = None
+
+
+class ExamIn(BaseModel):
+    course: str = Field(min_length=1, max_length=40)
+    kind: str
+    date: str                                       # YYYY-MM-DD (picked in a date input)
+    time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    room: str | None = Field(default=None, max_length=40)
+
+
+_extract_log: dict[int, list[float]] = {}
+EXTRACTS_PER_HOUR = 10       # each is a (cheap) Claude call; this caps a runaway loop
+
+
+def _class_out(c) -> dict:
+    return {"course": c["course"], "section": c["section"] or "", "kind": c["kind"] or "",
+            "day": timetable.DAYS[c["weekday"]], "start": c["starts"].strftime("%H:%M"),
+            "end": c["ends"].strftime("%H:%M"), "room": c["room"] or "",
+            "term_start": c["term_start"].isoformat(), "term_end": c["term_end"].isoformat()}
+
+
+@router.get("/schedule")
+async def schedule(member=Depends(current_member)):
+    return {"classes": [_class_out(c) for c in await db.classes_for(member["id"])]}
+
+
+@router.post("/schedule/extract", dependencies=[Depends(same_origin)])
+async def schedule_extract(body: ExtractIn, member=Depends(current_member)):
+    """Proposes rows from pasted text. Saves nothing: the member reviews, then PUTs."""
+    import time as _t
+    recent = [t for t in _extract_log.get(member["id"], []) if _t.monotonic() - t < 3600]
+    if len(recent) >= EXTRACTS_PER_HOUR:
+        raise HTTPException(429, "that's a lot of imports for one hour; try again later")
+    _extract_log[member["id"]] = recent + [_t.monotonic()]
+    try:
+        items = await timetable.extract(body.text)
+    except timetable.TimetableError as e:
+        raise HTTPException(400, str(e))
+    start, end = timetable.term_guess(items)
+    return {"classes": items, "term_start": start, "term_end": end}
+
+
+@router.put("/schedule", dependencies=[Depends(same_origin)])
+async def schedule_save(body: ScheduleIn, member=Depends(current_member)):
+    try:
+        ts = date.fromisoformat(body.term_start) if body.term_start else None
+        te = date.fromisoformat(body.term_end) if body.term_end else None
+    except ValueError:
+        raise HTTPException(400, "term dates must be YYYY-MM-DD")
+    rows, problems = timetable.validate([c.model_dump() for c in body.classes], ts, te)
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+    await db.replace_classes(member["id"], rows)
+    return {"saved": len(rows)}
+
+
+@router.get("/exams")
+async def exams(member=Depends(current_member)):
+    tz = ZoneInfo(settings.timezone)
+    now = datetime.now(tz)
+    rows = await db.exams_between(now - timedelta(hours=3), now + timedelta(days=60))
+    return {"exams": [{"id": e["id"], "member_id": e["member_id"], "name": e["name"], "course": e["course"],
+                       "kind": e["kind"], "starts_at": e["starts_at"].isoformat(),
+                       "ends_at": e["ends_at"].isoformat() if e["ends_at"] else None, "room": e["room"],
+                       "can_delete": member["id"] in (e["member_id"], e["created_by"])} for e in rows]}
+
+
+@router.post("/exams", dependencies=[Depends(same_origin)])
+async def exam_add(body: ExamIn, member=Depends(current_member)):
+    if body.kind not in timetable.KINDS:
+        raise HTTPException(400, "an exam is a quiz, midterm, or final")
+    tz = ZoneInfo(settings.timezone)
+    try:
+        d = date.fromisoformat(body.date)
+    except ValueError:
+        raise HTTPException(400, "date must be YYYY-MM-DD")
+    h, m = (int(x) for x in body.time.split(":"))
+    starts = datetime(d.year, d.month, d.day, h, m, tzinfo=tz)
+    ends = None
+    if body.end_time:
+        eh, em = (int(x) for x in body.end_time.split(":"))
+        ends = datetime(d.year, d.month, d.day, eh, em, tzinfo=tz)
+        if ends <= starts:
+            raise HTTPException(400, "the exam ends before it starts")
+    eid = await db.add_exam(member["id"], body.course.strip().upper(), body.kind, starts, ends,
+                            (body.room or "").strip() or None, member["id"])
+    return {"id": eid}
+
+
+@router.delete("/exams/{exam_id}", dependencies=[Depends(same_origin)])
+async def exam_delete(exam_id: int, member=Depends(current_member)):
+    if await db.delete_exam(exam_id, member["id"]) is None:
+        raise HTTPException(404, "no exam of yours with that id")
+    return {"ok": True}
 
 
 # --- money ---------------------------------------------------------------------------

@@ -368,6 +368,64 @@ async def delete_settlement(settlement_id: int, member_id: int) -> bool:
     return row is not None
 
 
+# --- classes + exams -------------------------------------------------------------
+
+async def replace_classes(member_id: int, rows: list[dict]) -> int:
+    """Replace a member's whole timetable atomically (a new import supersedes the old one)."""
+    async with _pool.acquire() as con:
+        async with con.transaction():
+            await con.execute("DELETE FROM classes WHERE member_id = $1", member_id)
+            await con.executemany(
+                "INSERT INTO classes (member_id, course, section, kind, weekday, starts, ends, room, "
+                "term_start, term_end) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                [(member_id, r["course"], r.get("section"), r.get("kind"), r["weekday"], r["starts"],
+                  r["ends"], r.get("room"), r["term_start"], r["term_end"]) for r in rows],
+            )
+    return len(rows)
+
+
+async def classes_for(member_id: int | None = None):
+    """Timetable rows (one per meeting day), with the member's name."""
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT c.*, m.name FROM classes c JOIN members m ON m.id = c.member_id "
+            "WHERE ($1::int IS NULL OR c.member_id = $1) "
+            "ORDER BY c.member_id, c.weekday, c.starts",
+            member_id,
+        )
+
+
+async def add_exam(member_id: int, course: str, kind: str, starts_at, ends_at, room, created_by) -> int:
+    async with _pool.acquire() as con:
+        return await con.fetchval(
+            "INSERT INTO exams (member_id, course, kind, starts_at, ends_at, room, created_by) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+            member_id, course, kind, starts_at, ends_at, room, created_by,
+        )
+
+
+async def exams_between(start, end, member_id: int | None = None):
+    """Exams starting in [start, end), with names, soonest first."""
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT e.*, m.name FROM exams e JOIN members m ON m.id = e.member_id "
+            "WHERE NOT e.deleted AND e.starts_at >= $1 AND e.starts_at < $2 "
+            "AND ($3::int IS NULL OR e.member_id = $3) ORDER BY e.starts_at",
+            start, end, member_id,
+        )
+
+
+async def delete_exam(exam_id: int, member_id: int):
+    """Soft-delete, only by whoever it's for or who added it. Returns its course, or None."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "UPDATE exams SET deleted = true WHERE id = $1 AND NOT deleted "
+            "AND (member_id = $2 OR created_by = $2) RETURNING course",
+            exam_id, member_id,
+        )
+    return row["course"] if row else None
+
+
 # --- status ----------------------------------------------------------------------
 
 async def set_status(member_id: int, text: str, until_at, place: dict | None = None) -> None:

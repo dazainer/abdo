@@ -13,7 +13,9 @@ export function Today({ me, toast }: { me: Member; toast: (msg: string) => void 
       <header className="screen-head"><Sign ar="النهاردة" en="Today" /></header>
       <main className="screen">
         <BriefingCard />
+        <FreeTogether />
         <Around me={me} toast={toast} />
+        <Exams me={me} toast={toast} />
         <Prayers />
         <MyReminders toast={toast} />
         <Week />
@@ -46,6 +48,7 @@ function BriefingCard() {
     ...d.arriving.map((x) => `${x}: arriving today`),
   ];
   const quiet = !d.events.length && d.calendar_ok && !forYou.length && !d.groceries
+    && !d.classes.length && !d.my_exams.length && !d.others_exams.length
     && !d.money.transfers.some((t) => t.cents >= 100);
 
   return (
@@ -90,6 +93,29 @@ function BriefingCard() {
             </dd>
           </div>
         )}
+        {d.classes.length > 0 && (
+          <div className="briefing-row">
+            <dt>Classes</dt>
+            <dd>
+              {d.classes.map((c, i) => (
+                <span key={i} className="briefing-line"><span className="briefing-time">{c.from}</span>{c.what}</span>
+              ))}
+            </dd>
+          </div>
+        )}
+        {(d.my_exams.length > 0 || d.others_exams.length > 0) && (
+          <div className="briefing-row">
+            <dt>Exams</dt>
+            <dd>
+              {d.my_exams.map((e, i) => (
+                <span key={`m${i}`} className="briefing-line">Your {e.course} {e.kind}: <strong>{e.when}</strong> ({e.day} {e.time})</span>
+              ))}
+              {d.others_exams.map((e, i) => (
+                <span key={`o${i}`} className="briefing-line">{e.name}: {e.course} {e.kind} {e.when} at {e.time}</span>
+              ))}
+            </dd>
+          </div>
+        )}
         {forYou.length > 0 && (
           <div className="briefing-row">
             <dt>For you</dt>
@@ -120,6 +146,106 @@ function BriefingCard() {
         )}
       </dl>
       {quiet && <p className="briefing-quiet">Nothing else on today.</p>}
+    </section>
+  );
+}
+
+function FreeTogether() {
+  const today = useToday();
+  const f = today.data?.free;
+  if (!f) return null;
+  const windows = f.together.map((w) => `${w.from}–${w.to}`).join(", ");
+  return (
+    <section className="section" aria-labelledby="free">
+      <h2 className="section-title" id="free">Free together today</h2>
+      <p className="free-line">{windows || "No common free time left today."}</p>
+      {(f.away.length > 0 || f.no_timetable.length > 0) && (
+        <p className="section-note">
+          {f.away.length > 0 && `Not counting ${f.away.join(", ")} (away). `}
+          {f.no_timetable.length > 0 && `No classes on file for ${f.no_timetable.join(", ")}. `}
+          <Link to="/schedule" className="btn-link">Your classes</Link>
+        </p>
+      )}
+    </section>
+  );
+}
+
+const KIND_LABEL: Record<string, string> = { quiz: "quiz", midterm: "midterm", final: "final" };
+
+function Exams({ me, toast }: { me: Member; toast: (msg: string) => void }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["exams"], queryFn: api.exams, refetchInterval: 5 * 60_000 });
+  const [adding, setAdding] = useState(false);
+  const [course, setCourse] = useState("");
+  const [kind, setKind] = useState("midterm");
+  const [date, setDate] = useState("");
+  const [time, setTime] = useState("");
+
+  async function add(e: FormEvent) {
+    e.preventDefault();
+    try {
+      await api.addExam({ course: course.trim(), kind, date, time });
+      setAdding(false);
+      setCourse("");
+      setDate("");
+      setTime("");
+      await qc.invalidateQueries({ queryKey: ["exams"] });
+    } catch (err) {
+      toast(errorText(err, "Couldn't add the exam."));
+    }
+  }
+
+  async function remove(id: number) {
+    try {
+      await api.deleteExam(id);
+      await qc.invalidateQueries({ queryKey: ["exams"] });
+    } catch (err) {
+      toast(errorText(err, "Couldn't remove it."));
+    }
+  }
+
+  const exams = q.data?.exams ?? [];
+  return (
+    <section className="section" aria-labelledby="exams">
+      <h2 className="section-title" id="exams">Exams coming up</h2>
+      {q.data && exams.length === 0 && !adding && (
+        <p className="empty">No quizzes, midterms, or finals on the list. Add yours so everyone knows.</p>
+      )}
+      <ul className="rows">
+        {exams.map((x) => (
+          <li className="row" key={x.id}>
+            <span className="row-main">
+              <span className="row-title"><strong>{x.member_id === me.id ? "You" : x.name}</strong> {x.course} {KIND_LABEL[x.kind]}</span>
+              <span className="row-meta">{relativeDay(dayOf(x.starts_at))} at {clock(x.starts_at)}{x.room ? `, ${x.room}` : ""}</span>
+            </span>
+            {x.can_delete && <button className="btn btn-quiet btn-small" onClick={() => void remove(x.id)}>Remove</button>}
+          </li>
+        ))}
+      </ul>
+      {adding ? (
+        <form onSubmit={add} style={{ display: "grid", gap: 8, marginTop: 10 }}>
+          <div className="inline-form" style={{ margin: 0 }}>
+            <input className="field" value={course} onChange={(e) => setCourse(e.target.value)} placeholder="Course, e.g. MATH 136"
+                   aria-label="Course" autoFocus maxLength={40} />
+            <select className="field field-narrow" value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Kind"
+                    style={{ flex: "0 0 112px" }}>
+              <option value="quiz">Quiz</option>
+              <option value="midterm">Midterm</option>
+              <option value="final">Final</option>
+            </select>
+          </div>
+          <div className="inline-form" style={{ margin: 0 }}>
+            <input className="field" type="date" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Date" />
+            <input className="field" type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Start time" />
+          </div>
+          <div className="inline-form" style={{ margin: 0 }}>
+            <button className="btn" disabled={!course.trim() || !date || !time}>Add exam</button>
+            <button type="button" className="btn btn-quiet" onClick={() => setAdding(false)}>Cancel</button>
+          </div>
+        </form>
+      ) : (
+        <button className="btn btn-quiet" style={{ marginTop: 10 }} onClick={() => setAdding(true)}>Add an exam</button>
+      )}
     </section>
   );
 }

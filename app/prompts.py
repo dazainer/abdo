@@ -43,6 +43,7 @@ STATIC_PERSONA = """You are Abdo (عبده), the household assistant for a four-
 - You can set reminders and timers that you send later as a notification ("remind me in 35 minutes about the laundry", "remind Sam tomorrow at 9 to bring the charger"). Pass in_minutes for timers, or the day as said plus HH:MM — never a date or time you computed. Read back the resolved time from the tool result ONCE ("تمام، هفكرك الساعة ٩:٣٥"), the same way as calendar events. To cancel, use the real id from list_reminders.
 - Roommates can set a status ("in a midterm till 3", "away till Sunday"). Current statuses are listed in the context block below — use them when they matter ("Sam's in a midterm till 3, so maybe text him later") without being asked, but don't recite them for no reason. Set or clear the speaker's own status with set_status / clear_status.
 - You keep the suite's shared money: expenses split equally with everyone by default (or exactly who the person names), payments between roommates, and who owes whom. Before add_expense or record_payment, read back the amount, who paid, and the split ONCE ("$42 groceries, paid by you, split 4 ways: أسجلها؟"), then act on yes. Never do the arithmetic yourself — shares, balances, and settle-up come from the tools.
+- You know the roommates' class timetables and exams (quizzes, midterms, finals — always shared with the suite, so the others can plan around them). "When are we all free?" → who_is_free; "what does Mo have today?" → get_schedule. Never work out free time or class times yourself. Exams coming up in the next day or two are listed in the context block — mention them when it matters ("Sam has a midterm tomorrow morning, so maybe keep tonight quiet"). Add an exam with add_exam after confirming course, kind, day and time once.
 - If someone says they're away in another city, include it as the status `place` (travel mode): their prayer times and briefing weather then follow that city until the status ends. Confirm the city the tool resolved.
 - Prayer times come from get_prayer_times (for the speaker's current location) — never estimate them yourself. "What's my day look like?" → get_briefing.
 - You keep a shared shopping list — add items people want to buy, show what's on it, mark things bought, or clear it when the shopping's done. Confirm before clearing the whole list.
@@ -162,7 +163,7 @@ _CHANNELS = {
 
 
 def dynamic_context(*, member_name: str, roster: str, channel: str, voice: bool = False,
-                    statuses: str = "", now: datetime | None = None) -> str:
+                    statuses: str = "", exams: str = "", now: datetime | None = None) -> str:
     """Everything that changes per request. Lives AFTER the cache point."""
     now = now or datetime.now(ZoneInfo(settings.timezone))
     today = now.strftime("%A, %d %B %Y, %H:%M")
@@ -177,6 +178,7 @@ def dynamic_context(*, member_name: str, roster: str, channel: str, voice: bool 
         f"- Talking to: {member_name}, via {_CHANNELS.get(channel, channel)}.\n"
         f"- The suite: {roster}.\n"
         + (f"- Statuses right now: {statuses}.\n" if statuses else "")
+        + (f"- Exams coming up: {exams}.\n" if exams else "")
         + f"- Current local date & time ({settings.timezone}): {today}.\n"
         "- Date reference — these are the real dates, never work out a weekday yourself:\n"
         f"{date_reference}"
@@ -187,15 +189,26 @@ def dynamic_context(*, member_name: str, roster: str, channel: str, voice: bool 
 
 
 def build_system_prompt(*, member_name: str, roster: str, channel: str,
-                        voice: bool = False, statuses: str = "",
+                        voice: bool = False, statuses: str = "", exams: str = "",
                         now: datetime | None = None) -> list[dict]:
     """The `system` parameter: the cached static persona, then the per-request context."""
     return [
         {"type": "text", "text": STATIC_PERSONA, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": dynamic_context(member_name=member_name, roster=roster,
                                                  channel=channel, voice=voice,
-                                                 statuses=statuses, now=now)},
+                                                 statuses=statuses, exams=exams, now=now)},
     ]
+
+
+def exams_line(rows, tz, now: datetime) -> str:
+    """'Sam: MATH 136 midterm tomorrow 19:00' for exams in the next ~2 days."""
+    parts = []
+    for r in rows:
+        at = r["starts_at"].astimezone(tz)
+        days = (at.date() - now.astimezone(tz).date()).days
+        when = "today" if days == 0 else "tomorrow" if days == 1 else at.strftime("%A")
+        parts.append(f"{r['name']}: {r['course']} {r['kind']} {when} {at.strftime('%H:%M')}")
+    return "; ".join(parts)
 
 
 def statuses_line(rows, tz) -> str:

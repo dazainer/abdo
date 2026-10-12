@@ -183,3 +183,40 @@ CREATE TABLE settlements (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (from_member <> to_member)
 );
+
+-- ---------- Schedules (Phase 7b.2; live DBs get these via migrations/phase7b2_schedule.sql) ----------
+
+-- Weekly classes, one row per meeting day (imported from a pasted Quest schedule, confirmed
+-- by the member before saving). weekday: Monday = 0 (Python's date.weekday()).
+CREATE TABLE classes (
+    id          BIGSERIAL PRIMARY KEY,
+    member_id   INTEGER NOT NULL REFERENCES members(id),
+    course      TEXT NOT NULL,                  -- "MATH 136"
+    section     TEXT,                           -- "001"
+    kind        TEXT,                           -- LEC / TUT / LAB / ...
+    weekday     SMALLINT NOT NULL CHECK (weekday BETWEEN 0 AND 6),
+    starts      TIME NOT NULL,                  -- local time
+    ends        TIME NOT NULL,
+    room        TEXT,
+    term_start  DATE NOT NULL,
+    term_end    DATE NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (ends > starts),
+    CHECK (term_end >= term_start)
+);
+CREATE INDEX idx_classes_member ON classes (member_id);
+
+-- Quizzes, midterms, finals. Always visible to the suite: the point is letting the others know.
+CREATE TABLE exams (
+    id          BIGSERIAL PRIMARY KEY,
+    member_id   INTEGER NOT NULL REFERENCES members(id),
+    course      TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('quiz', 'midterm', 'final')),
+    starts_at   TIMESTAMPTZ NOT NULL,
+    ends_at     TIMESTAMPTZ,
+    room        TEXT,
+    created_by  INTEGER REFERENCES members(id),
+    deleted     BOOLEAN NOT NULL DEFAULT false,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_exams_upcoming ON exams (starts_at) WHERE NOT deleted;

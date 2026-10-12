@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router";
 import { api, ApiError, type Member, type Prefs } from "../api";
 import { Sign } from "../components/Sign";
 import { disablePush, enablePush, isIOS, isStandalone, pushState, type PushState } from "../lib/push";
@@ -135,6 +136,18 @@ export function Settings({ me, onLoggedOut, toast }: {
             </ul>
           </section>
         )}
+
+        <section className="section">
+          <ul className="rows">
+            <li className="row">
+              <span className="row-main">
+                <span className="row-title">Your class schedule</span>
+                <span className="row-meta">Abdo uses it for "when are we all free?" and your briefing</span>
+              </span>
+              <Link to="/schedule" className="btn btn-quiet btn-small" style={{ textDecoration: "none" }}>Open</Link>
+            </li>
+          </ul>
+        </section>
 
         {!isStandalone() && (
           <section className="section">

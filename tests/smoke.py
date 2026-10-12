@@ -54,6 +54,8 @@ class FakeDB:
         self.statuses = {}
         self.expenses = []
         self.settlements = []
+        self.classes = []
+        self.exams = []
 
     # members
     async def get_member_by_telegram_id(self, tg_id):
@@ -180,6 +182,34 @@ class FakeDB:
                                     "until_at": until_at, "updated_at": datetime.now(timezone.utc),
                                     "place": p.get("label"), "place_lat": p.get("lat"),
                                     "place_lng": p.get("lng"), "place_tz": p.get("tz")}
+
+    # classes + exams
+    async def replace_classes(self, member_id, rows):
+        self.classes = [c for c in self.classes if c["member_id"] != member_id]
+        self.classes += [{**r, "member_id": member_id, "name": NAMES[member_id]} for r in rows]
+        return len(rows)
+
+    async def classes_for(self, member_id=None):
+        return sorted([c for c in self.classes if member_id is None or c["member_id"] == member_id],
+                      key=lambda c: (c["member_id"], c["weekday"], c["starts"]))
+
+    async def add_exam(self, member_id, course, kind, starts_at, ends_at, room, created_by):
+        self._exam_seq = getattr(self, "_exam_seq", 0) + 1
+        self.exams.append({"id": self._exam_seq, "member_id": member_id, "name": NAMES[member_id],
+                           "course": course, "kind": kind, "starts_at": starts_at, "ends_at": ends_at,
+                           "room": room, "created_by": created_by, "deleted": False})
+        return self._exam_seq
+
+    async def exams_between(self, start, end, member_id=None):
+        return sorted([e for e in self.exams if not e["deleted"] and start <= e["starts_at"] < end
+                       and (member_id is None or e["member_id"] == member_id)], key=lambda e: e["starts_at"])
+
+    async def delete_exam(self, exam_id, member_id):
+        for e in self.exams:
+            if e["id"] == exam_id and not e["deleted"] and member_id in (e["member_id"], e["created_by"]):
+                e["deleted"] = True
+                return e["course"]
+        return None
 
     # money
     async def add_expense(self, description, amount_cents, paid_by, created_by, spent_on, shares):
@@ -343,6 +373,7 @@ for _name in ("get_member_by_telegram_id", "roster_string", "get_member_id_by_na
               "set_status", "clear_status", "current_statuses",
               "add_expense", "add_settlement", "money_ledger", "recent_expenses",
               "recent_settlements", "delete_expense", "delete_settlement",
+              "replace_classes", "classes_for", "add_exam", "exams_between", "delete_exam",
               "log_message", "recent_messages", "add_fact", "nearest_fact", "update_fact",
               "search_facts", "upsert_location", "get_location", "get_all_locations",
               "add_shopping_item", "get_shopping_list", "mark_item_bought",
@@ -2071,6 +2102,203 @@ def test_web_money():
         fake.settlements.clear()
 
 
+# =============================================================================
+# Phase 7b.2: timetables + exams
+# =============================================================================
+
+from datetime import time as dtime  # noqa: E402
+
+QUEST_ITEMS = [
+    {"course": "math 136", "section": "001", "kind": "LEC", "days": ["Mon", "Wed", "Fri"], "start": "10:30",
+     "end": "11:20", "room": "MC 2065", "start_date": "2026-09-09", "end_date": "2026-12-08"},
+    {"course": "MATH 136", "section": "102", "kind": "TUT", "days": ["Fri"], "start": "14:30",
+     "end": "15:20", "room": "MC 4021", "start_date": "", "end_date": ""},
+]
+
+
+def test_timetable_validate():
+    print("Scenario: timetable rows are validated in code (whatever the model or browser sent)")
+    from app import timetable
+    rows, problems = timetable.validate(QUEST_ITEMS, date(2026, 9, 9), date(2026, 12, 8))
+    check("one row per meeting day", len(rows) == 4 and [r["weekday"] for r in rows] == [0, 2, 4, 4])
+    check("course normalized, times parsed", rows[0]["course"] == "MATH 136" and rows[0]["starts"] == dtime(10, 30))
+    check("missing term dates filled from the term", rows[3]["term_start"] == date(2026, 9, 9) and not problems)
+    _, problems = timetable.validate(QUEST_ITEMS)
+    check("no term dates at all -> a clear problem", problems == ["MATH 136: no term dates (set them above)"])
+    bad = [{**QUEST_ITEMS[0], "end": "09:00"}, {**QUEST_ITEMS[0], "days": []}, {**QUEST_ITEMS[0], "start": "soon"}]
+    _, problems = timetable.validate(bad)
+    check("bad rows rejected with reasons", len(problems) == 3 and "ends before it starts" in problems[0])
+    check("term guess = most common dates", timetable.term_guess(QUEST_ITEMS) == ("2026-09-09", "2026-12-08"))
+
+    tz = TZ
+    d = date(2026, 10, 14)
+    w = (datetime.combine(d, dtime(8), tz), datetime.combine(d, dtime(23), tz))
+    busy = [(datetime.combine(d, dtime(10), tz), datetime.combine(d, dtime(11), tz)),
+            (datetime.combine(d, dtime(10, 30), tz), datetime.combine(d, dtime(12), tz)),
+            (datetime.combine(d, dtime(12, 15), tz), datetime.combine(d, dtime(13), tz))]
+    free = [(a.strftime("%H:%M"), b.strftime("%H:%M")) for a, b in timetable.free_windows(w, busy)]
+    check("free windows merge overlaps and drop gaps under 30 min",
+          free == [("08:00", "10:00"), ("13:00", "23:00")])
+
+
+async def test_timetable_extract():
+    print("Scenario: Quest paste -> one structured-output call; nothing saved")
+    import json as _json
+    from app import timetable
+    brain.client = FakeClient([_resp("end_turn", [_text_block(_json.dumps({"classes": QUEST_ITEMS}))])])
+    items = await timetable.extract("MATH 136 - Linear Algebra 1\nClass Nbr Section Component Days & Times ...")
+    req = brain.client.messages.requests[0]
+    check("extraction returns the proposed items", items == QUEST_ITEMS)
+    check("uses a strict JSON schema at low effort",
+          req["output_config"]["format"]["type"] == "json_schema" and req["output_config"]["effort"] == "low"
+          and req["output_config"]["format"]["schema"]["additionalProperties"] is False)
+    check("same model as the brain", req["model"] == brain.MODEL)
+    try:
+        await timetable.extract("hi")
+        check("too-short paste rejected before any call", False)
+    except timetable.TimetableError:
+        check("too-short paste rejected before any call", True)
+    brain.client = FakeClient([_resp("refusal", [])])
+    try:
+        await timetable.extract("x" * 50)
+        check("refusal -> honest error", False)
+    except timetable.TimetableError:
+        check("refusal -> honest error", True)
+    import anthropic as _anthropic
+
+    class Down:
+        async def create(self, **kw):
+            raise _anthropic.APIConnectionError(request=__import__("httpx").Request("POST", "https://x"))
+
+    brain.client = SimpleNamespace(messages=Down())
+    try:
+        await timetable.extract("x" * 50)
+        check("API failure -> honest error, not a 500", False)
+    except timetable.TimetableError:
+        check("API failure -> honest error, not a 500", True)
+
+
+async def test_who_is_free_and_exams():
+    print("Scenario: who's free (classes, exams, travel), exam tools, briefing, Abdo's context")
+    from app import timetable, briefing
+    fake.classes, fake.exams, fake.statuses = [], [], {}
+    wed = date(2026, 10, 14)                     # a Wednesday, inside the term
+    rows, _ = timetable.validate(QUEST_ITEMS, date(2026, 9, 9), date(2026, 12, 8))
+    await fake.replace_classes(1, rows)          # Zain: MATH 136 Mon/Wed/Fri 10:30-11:20
+    await fake.replace_classes(2, [{"course": "CS 246", "section": None, "kind": "LAB", "weekday": 2,
+                                     "starts": dtime(18), "ends": dtime(19, 30), "room": None,
+                                     "term_start": date(2026, 9, 9), "term_end": date(2026, 12, 8)}])
+    await fake.add_exam(1, "MATH 136", "midterm", datetime(2026, 10, 14, 19, 0, tzinfo=TZ), None, None, 1)
+    f = await timetable.who_is_free(wed, dtime(17), dtime(23), now=datetime(2026, 10, 14, 9, 0, tzinfo=TZ))
+    check("together = window minus everyone's classes/exams",
+          f["together"] == [{"from": "17:00", "to": "18:00"}, {"from": "21:00", "to": "23:00"}])
+    sam = next(p for p in f["people"] if p["name"] == "Sam")
+    check("no timetable flagged, not assumed busy", sam["has_timetable"] is False and sam["busy"] == [])
+    check("exam blocks 2 hours without an end time",
+          any(b["what"] == "MATH 136 midterm" and b["to"] == "21:00" for b in f["people"][0]["busy"]))
+    sat = await timetable.who_is_free(date(2026, 12, 19), dtime(9), dtime(12))
+    check("after the term ends, classes don't count", sat["together"] == [{"from": "09:00", "to": "12:00"}])
+
+    fake.statuses = {2: {"member_id": 2, "name": "Mo", "text": "away", "until_at": None, "updated_at": None,
+                         "place": "Montreal, Canada", "place_lat": 45.5, "place_lng": -73.6, "place_tz": "America/Toronto"}}
+    f = await timetable.who_is_free(wed, dtime(17), dtime(23), now=datetime(2026, 10, 14, 9, 0, tzinfo=TZ))
+    check("someone away isn't counted against 'together', and is named",
+          {"from": "17:00", "to": "19:00"} in f["together"] and "away (in Montreal, Canada)" in timetable.describe_free(f))
+    fake.statuses = {}
+
+    out = await tools.run_tool("add_exam", {"course": "cs 246", "kind": "midterm", "day": "tomorrow",
+                                            "time": "19:00", "end_time": "21:00", "room": "M3 1006"}, member_id=2)
+    check("add exam resolves the day in code", out.startswith("Added exam #") and "CS 246 midterm" in out)
+    out = await tools.run_tool("add_exam", {"course": "x", "kind": "assignment", "day": "today", "time": "10:00"}, member_id=2)
+    check("assignments aren't exams", out.startswith("ERROR"))
+    out = await tools.run_tool("list_exams", {}, member_id=1)
+    check("exams shared with everyone", "Mo: CS 246 midterm" in out)
+    eid = fake.exams[-1]["id"]
+    out = await tools.run_tool("delete_exam", {"exam_id": eid}, member_id=3)
+    check("can't remove someone else's exam", out.startswith("ERROR"))
+    out = await tools.run_tool("get_schedule", {"name": "Zain", "day": "2026-10-14"}, member_id=2)
+    check("get_schedule lists classes + exams in order", "10:30–11:20 MATH 136 LEC" in out and "19:00–21:00 MATH 136 midterm" in out)
+    out = await tools.run_tool("who_is_free", {"day": "2026-10-14", "from_time": "17:00"}, member_id=1)
+    check("who_is_free tool text", out.startswith("Free together on Wednesday 14 October"))
+
+    brain.client = FakeClient(reply_only("ok"))
+    await brain.think(ZAIN, "dm:1", "anything tomorrow?")
+    ctx = brain.client.messages.requests[0]["system"][1]["text"]
+    check("tomorrow's exam reaches Abdo's context", "Exams coming up: Mo: CS 246 midterm tomorrow 19:00" in ctx)
+
+    real_fetch = briefing._fetch_weather
+
+    async def no_weather(lat, lng, tz):
+        raise RuntimeError("offline")
+
+    briefing._fetch_weather, briefing._weather_cache = no_weather, {}
+    try:
+        b = await briefing.gather(ZAIN, datetime(2026, 10, 14, 8, 0, tzinfo=TZ))
+        check("briefing: my classes today", b["classes"] == [{"what": "MATH 136 LEC", "from": "10:30", "to": "11:20"}])
+        check("briefing: my exam with a countdown", b["my_exams"][0]["when"] == "today")
+        text = briefing.render_text(b)[1]
+        check("briefing text has classes + exam", "Classes: MATH 136 LEC 10:30" in text and "Your MATH 136 midterm: today" in text)
+    finally:
+        briefing._fetch_weather, briefing._weather_cache = real_fetch, {}
+    fake.classes, fake.exams = [], []
+
+
+def test_web_schedule():
+    print("Scenario: web schedule import (extract -> review -> save) and exams")
+    import re
+    import json as _json
+    from fastapi.testclient import TestClient
+    from app import main as app_main
+    from app.channels import web as web_channel
+    settings.session_pepper = "test-pepper"
+    dms = []
+
+    async def capture(chat_id, text, disable_notification=False):
+        dms.append(text)
+
+    real_send = telegram.send_message
+    telegram.send_message = capture
+    H = {"X-Abdo": "1"}
+    fake.codes.clear()
+    fake.classes, fake.exams = [], []
+    web_channel._extract_log.clear()
+    try:
+        c = TestClient(app_main.app, base_url="https://testserver")
+        c.post("/api/auth/request-code", json={"name": "Zain"}, headers=H)
+        c.post("/api/auth/verify", json={"name": "Zain", "code": re.search(r"\b(\d{6})\b", dms[-1]).group(1)}, headers=H)
+
+        brain.client = FakeClient([_resp("end_turn", [_text_block(_json.dumps({"classes": QUEST_ITEMS}))])])
+        r = c.post("/api/schedule/extract", json={"text": "MATH 136 ... pasted from Quest ..."}, headers=H)
+        j = r.json()
+        check("extract proposes rows + term guess, saves nothing",
+              r.status_code == 200 and len(j["classes"]) == 2 and j["term_start"] == "2026-09-09" and fake.classes == [])
+        r = c.put("/api/schedule", json={"classes": j["classes"]}, headers=H)
+        check("save without term dates for every row -> 400 with the reason", r.status_code == 400 and "term dates" in r.text)
+        r = c.put("/api/schedule", json={"classes": j["classes"], "term_start": "2026-09-09",
+                                         "term_end": "2026-12-08"}, headers=H)
+        check("save after review", r.json() == {"saved": 4} and len(fake.classes) == 4)
+        got = c.get("/api/schedule").json()["classes"]
+        check("schedule read back per meeting day", [x["day"] for x in got] == ["Mon", "Wed", "Fri", "Fri"])
+
+        r = c.post("/api/exams", json={"course": "math 136", "kind": "midterm", "date": "2026-10-20", "time": "19:00"}, headers=H)
+        check("add exam", r.status_code == 200 and fake.exams[-1]["course"] == "MATH 136")
+        check("bad kind -> 400", c.post("/api/exams", json={"course": "x", "kind": "essay", "date": "2026-10-20",
+                                                            "time": "19:00"}, headers=H).status_code == 400)
+        check("bad time -> 422", c.post("/api/exams", json={"course": "x", "kind": "quiz", "date": "2026-10-20",
+                                                            "time": "7pm"}, headers=H).status_code == 422)
+        t = c.get("/api/today").json()
+        check("today includes free-together data", "together" in t["free"] and "no_timetable" in t["free"])
+
+        web_channel._extract_log[1] = [__import__("time").monotonic()] * web_channel.EXTRACTS_PER_HOUR
+        r = c.post("/api/schedule/extract", json={"text": "x" * 40}, headers=H)
+        check("extraction is rate-limited (cost guard)", r.status_code == 429)
+    finally:
+        telegram.send_message = real_send
+        settings.session_pepper = None
+        fake.classes, fake.exams = [], []
+        web_channel._extract_log.clear()
+
+
 def test_tts_model_routing():
     print("Scenario: digit-bearing replies route to multilingual_v2")
     from app import tts
@@ -2123,6 +2351,9 @@ async def main():
     test_money_math()
     await test_money_tools()
     await test_travel_mode()
+    test_timetable_validate()
+    await test_timetable_extract()
+    await test_who_is_free_and_exams()
     print(f"\n{passed} passed, {failed} failed")
 
 
@@ -2135,5 +2366,6 @@ if __name__ == "__main__":
     test_web_app()
     test_web_today()
     test_web_money()
+    test_web_schedule()
     print(f"\nTOTAL: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

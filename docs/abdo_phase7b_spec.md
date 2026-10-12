@@ -5,8 +5,8 @@ smoke tests, and a live check before the next starts.
 
 | Part | Contents | Status |
 |---|---|---|
-| **7b.1** | Expenses + settle-up, travel mode | built 2026-10-12 (353 backend checks, 20 frontend tests); awaiting deploy |
-| **7b.2** | Class timetables (paste from Quest), exams | outlined below |
+| **7b.1** | Expenses + settle-up, travel mode | deployed 2026-10-12 |
+| **7b.2** | Class timetables (paste from Quest), exams | built 2026-10-12 (390 backend checks); awaiting deploy |
 | **7b.3** | Groceries+ (fridge + expiry, "going shopping"), polls | outlined below |
 | **7b.4** | Buses (ION + GRT) | outlined below; details from Zain later |
 

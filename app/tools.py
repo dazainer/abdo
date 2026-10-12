@@ -383,6 +383,69 @@ TOOLS = [
         },
     },
     {
+        "name": "who_is_free",
+        "description": (
+            "When the roommates are free on a day, from their class timetables, exams, and who's "
+            "away. Use for 'when are we all free tonight?', 'is Mo free at 3?', 'can we do dinner "
+            "Friday?'. Times are computed in code: report them, never estimate."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "day": {"type": "string", "description": "The day as said (default today)."},
+                "from_time": {"type": "string", "description": "Window start HH:MM (optional; 'tonight' ≈ 17:00)."},
+                "to_time": {"type": "string", "description": "Window end HH:MM (optional, default 23:00)."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_schedule",
+        "description": "A roommate's classes and exams on a day (default: the speaker, today).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Whose schedule (omit for the speaker)."},
+                "day": {"type": "string", "description": "The day as said (default today)."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "add_exam",
+        "description": (
+            "Add a quiz, midterm, or final so the suite knows (it's shared with everyone). Pass the "
+            "day as said and the time HH:MM. Confirm the resolved details once before calling."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "course": {"type": "string", "description": "e.g. 'MATH 136'."},
+                "kind": {"type": "string", "enum": ["quiz", "midterm", "final"]},
+                "day": {"type": "string", "description": "The day as said, or an exact date from the reference."},
+                "time": {"type": "string", "description": "Start, HH:MM 24h."},
+                "end_time": {"type": "string", "description": "End HH:MM (optional)."},
+                "room": {"type": "string", "description": "Optional."},
+                "for": {"type": "string", "description": "Whose exam, if not the speaker's."},
+            },
+            "required": ["course", "kind", "day", "time"],
+        },
+    },
+    {
+        "name": "list_exams",
+        "description": "Upcoming quizzes/midterms/finals (next 30 days) for everyone or one roommate, with ids.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "Only this roommate's (optional)."}},
+            "required": [],
+        },
+    },
+    {
+        "name": "delete_exam",
+        "description": "Remove an exam by id from list_exams (only whoever it's for or who added it).",
+        "input_schema": {"type": "object", "properties": {"exam_id": {"type": "integer"}}, "required": ["exam_id"]},
+    },
+    {
         "name": "add_package",
         "description": (
             "Record an incoming package/delivery for someone in the suite, so everyone knows "
@@ -578,6 +641,96 @@ async def _money_tool(name: str, tool_input: dict, member_id: int | None) -> str
                     f"Do NOT claim it was deleted; call list_expenses for real ids.")
         return f"Deleted expense #{tool_input['expense_id']} ({desc})."
     return f"Unknown tool: {name}"
+
+
+async def _schedule_tool(name: str, tool_input: dict, member_id: int | None) -> str:
+    from app import timetable
+    tz = ZoneInfo(settings.timezone)
+
+    def day_of(raw):
+        return calendar_svc.resolve_date(raw or "today")
+
+    try:
+        if name == "who_is_free":
+            day = day_of(tool_input.get("day"))
+            frm = time_of(tool_input.get("from_time"))
+            to = time_of(tool_input.get("to_time"))
+            return timetable.describe_free(await timetable.who_is_free(day, frm, to))
+
+        if name == "get_schedule":
+            who = member_id
+            if tool_input.get("name"):
+                who = await db.get_member_id_by_name(tool_input["name"])
+                if who is None:
+                    return f"ERROR: nobody in the suite is called '{tool_input['name']}'."
+            if who is None:
+                return "ERROR: whose schedule? Ask the user."
+            day = day_of(tool_input.get("day"))
+            start = datetime.combine(day, datetime.min.time(), tz)
+            classes = await db.classes_for(who)
+            busy = timetable.busy_on(day, classes, await db.exams_between(start, start + timedelta(days=1), who), tz)
+            label = day.strftime("%A %d %B")
+            if not classes and not busy:
+                return f"No timetable on file and nothing scheduled for {label}."
+            if not busy:
+                return f"Nothing scheduled on {label}."
+            return f"{label}:\n" + "\n".join(f"- {b.start.strftime('%H:%M')}–{b.end.strftime('%H:%M')} {b.what}" for b in busy)
+
+        if name == "add_exam":
+            kind = (tool_input.get("kind") or "").lower()
+            if kind not in timetable.KINDS:
+                return "ERROR: an exam is a quiz, midterm, or final."
+            who = member_id
+            if tool_input.get("for"):
+                who = await db.get_member_id_by_name(tool_input["for"])
+                if who is None:
+                    return f"ERROR: nobody in the suite is called '{tool_input['for']}'."
+            if who is None:
+                return "ERROR: whose exam? Ask the user."
+            d = day_of(tool_input["day"])
+            h, m = calendar_svc._parse_time(tool_input["time"])
+            starts = datetime(d.year, d.month, d.day, h, m, tzinfo=tz)
+            ends = None
+            if tool_input.get("end_time"):
+                eh, em = calendar_svc._parse_time(tool_input["end_time"])
+                ends = datetime(d.year, d.month, d.day, eh, em, tzinfo=tz)
+                if ends <= starts:
+                    return "ERROR: the exam ends before it starts. Ask the user."
+            eid = await db.add_exam(who, tool_input["course"].strip().upper(), kind, starts, ends,
+                                    (tool_input.get("room") or "").strip() or None, member_id)
+            return f"Added exam #{eid}: {tool_input['course'].strip().upper()} {kind}, {_when(starts)}."
+
+        if name == "list_exams":
+            who = None
+            if tool_input.get("name"):
+                who = await db.get_member_id_by_name(tool_input["name"])
+                if who is None:
+                    return f"ERROR: nobody in the suite is called '{tool_input['name']}'."
+            now = datetime.now(tz)
+            rows = await db.exams_between(now - timedelta(hours=3), now + timedelta(days=30), who)
+            if not rows:
+                return "No exams in the next 30 days."
+            return "\n".join(f"- #{r['id']} {r['name']}: {r['course']} {r['kind']}, {_when(r['starts_at'])}"
+                             + (f", {r['room']}" if r["room"] else "") for r in rows)
+
+        if name == "delete_exam":
+            course = await db.delete_exam(tool_input["exam_id"], member_id)
+            if course is None:
+                return (f"ERROR: no exam #{tool_input['exam_id']} for or added by this person. Do NOT claim "
+                        f"it was removed; call list_exams for real ids.")
+            return f"Removed exam #{tool_input['exam_id']} ({course})."
+    except (ValueError, IndexError) as e:
+        return f"ERROR: couldn't understand that day or time ({e}). Ask the user; do NOT guess."
+    return f"Unknown tool: {name}"
+
+
+def time_of(raw):
+    """'19:00' -> time, None -> None. Raises ValueError for junk."""
+    if not raw:
+        return None
+    from datetime import time as _time
+    h, m = calendar_svc._parse_time(raw)
+    return _time(h, m)
 
 
 def _package_line(r) -> str:
@@ -871,6 +1024,9 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
 
     if name in ("add_expense", "get_balances", "record_payment", "list_expenses", "delete_expense"):
         return await _money_tool(name, tool_input, member_id)
+
+    if name in ("who_is_free", "get_schedule", "add_exam", "list_exams", "delete_exam"):
+        return await _schedule_tool(name, tool_input, member_id)
 
     if name == "get_briefing":
         from app import briefing   # imported here: briefing imports this module
