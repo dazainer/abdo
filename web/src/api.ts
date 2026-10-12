@@ -77,6 +77,27 @@ export interface Today {
   reminders: Reminder[];
 }
 
+export interface Briefing {
+  greeting: string;
+  name: string;
+  date: string;
+  day: string; // "Monday 12 October"
+  weather: {
+    temp: number;
+    feels: number;
+    sky: string;
+    kind: "clear" | "cloudy" | "fog" | "rain" | "snow" | "storm";
+    high: number;
+    low: number;
+    rain: number | null;
+  } | null;
+  events: { summary: string; time: string | null }[];
+  calendar_ok: boolean;
+  waiting: string[];
+  arriving: string[];
+  groceries: number;
+}
+
 export interface Prefs {
   briefing: boolean;
   briefing_time: string;
@@ -161,6 +182,7 @@ export const api = {
     request<{ configured: boolean; events: CalendarEvent[] }>("GET", `/api/calendar?days=${days}`),
 
   today: () => request<Today>("GET", "/api/today"),
+  briefing: () => request<Briefing>("GET", "/api/briefing"),
   setStatus: (text: string, until_time?: string) =>
     request<{ ok: true }>("PUT", "/api/status", { text, until_time }),
   clearStatus: () => request<{ ok: true }>("DELETE", "/api/status"),

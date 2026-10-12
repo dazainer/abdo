@@ -211,6 +211,6 @@ The full plan, decisions log, and later-phase outlines are in `docs/ROADMAP.md`.
   Watch item: occasional MSA sentences since the move. Note the triggering message if it recurs.
 - **Phase 6 (done, deployed 2026-10-11)** → `docs/abdo_phase6_webapp_spec.md`: web app (React
   PWA), Telegram-code login, shared DM thread, push infrastructure, Dockerfile.
-- **Phase 7a (current: built, awaiting deploy)** → `docs/abdo_phase7a_proactive_spec.md`:
+- **Phase 7a (current: deployed 2026-10-12; briefing card added after the first live briefing)** → `docs/abdo_phase7a_proactive_spec.md`:
   scheduler, reminders/timers, morning briefing, prayer-time notifications, statuses, Today tab. **Phase 7b** → expenses, timetables, deadlines, groceries+, polls, buses. **Phase 8** → always-on room
   device (wake word, speaker ID; prove on a Mac before buying hardware). Specs written when each starts.

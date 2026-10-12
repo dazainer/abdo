@@ -1,7 +1,9 @@
 import { useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router";
 import { api, ApiError, type CalendarEvent, type Member } from "../api";
 import { Sign } from "../components/Sign";
+import { Icon } from "../components/Icon";
 import { clock, relativeDay, todayISO, dayOf } from "../lib/dates";
 
 export function Today({ me, toast }: { me: Member; toast: (msg: string) => void }) {
@@ -9,6 +11,7 @@ export function Today({ me, toast }: { me: Member; toast: (msg: string) => void 
     <div className="page">
       <header className="screen-head"><Sign ar="النهاردة" en="Today" /></header>
       <main className="screen">
+        <BriefingCard />
         <Around me={me} toast={toast} />
         <Prayers />
         <MyReminders toast={toast} />
@@ -24,6 +27,86 @@ function errorText(err: unknown, fallback: string): string {
 
 function useToday() {
   return useQuery({ queryKey: ["today"], queryFn: api.today, refetchInterval: 60_000 });
+}
+
+// The morning briefing, live: the same data the 8:00 notification is built from, laid out
+// as a card instead of a block of text. Statuses and prayer times have their own sections
+// right below, so the card leaves them out.
+function BriefingCard() {
+  const b = useQuery({ queryKey: ["briefing"], queryFn: api.briefing, refetchInterval: 10 * 60_000 });
+  if (b.isPending) return null;
+  if (b.isError || !b.data) {
+    return <p className="notice notice-error">Couldn't load your briefing.</p>;
+  }
+  const d = b.data;
+  const w = d.weather;
+  const forYou = [
+    ...d.waiting.map((x) => `${x}: waiting at the building`),
+    ...d.arriving.map((x) => `${x}: arriving today`),
+  ];
+  const quiet = !d.events.length && d.calendar_ok && !forYou.length && !d.groceries;
+
+  return (
+    <section className="plate briefing" aria-labelledby="briefing-title">
+      <div className="briefing-head">
+        <p className="briefing-day">{d.day}</p>
+        <h2 className="briefing-title" id="briefing-title" dir="rtl" lang="ar">
+          {d.greeting} يا {d.name}
+        </h2>
+      </div>
+
+      {w && (
+        <div className="briefing-weather">
+          <span className="briefing-icon"><Icon name={w.kind} label={w.sky || w.kind} /></span>
+          <span className="briefing-temp">{w.temp}<span className="briefing-deg">°</span></span>
+          <span className="briefing-sky">
+            <span className="briefing-sky-main">{w.sky}</span>
+            <span>
+              {w.feels !== w.temp ? `Feels like ${w.feels}°. ` : ""}High {w.high}°, low {w.low}°
+              {w.rain !== null ? `. ${w.rain}% chance of rain or snow` : ""}
+            </span>
+          </span>
+        </div>
+      )}
+
+      <dl className="briefing-rows">
+        {!d.calendar_ok ? (
+          <div className="briefing-row">
+            <dt>Today</dt>
+            <dd>Couldn't check the calendar.</dd>
+          </div>
+        ) : d.events.length > 0 && (
+          <div className="briefing-row">
+            <dt>Today</dt>
+            <dd>
+              {d.events.map((e, i) => (
+                <span key={i} className="briefing-line">
+                  {e.time && <span className="briefing-time">{e.time}</span>}
+                  <span className="row-title" style={{ display: "inline" }}>{e.summary}</span>
+                </span>
+              ))}
+            </dd>
+          </div>
+        )}
+        {forYou.length > 0 && (
+          <div className="briefing-row">
+            <dt>For you</dt>
+            <dd>{forYou.map((x) => <span key={x} className="briefing-line">{x}</span>)}</dd>
+          </div>
+        )}
+        {d.groceries > 0 && (
+          <div className="briefing-row">
+            <dt>Groceries</dt>
+            <dd>
+              {d.groceries} item{d.groceries === 1 ? "" : "s"} on the list.{" "}
+              <Link to="/lists" className="briefing-link">See the list</Link>
+            </dd>
+          </div>
+        )}
+      </dl>
+      {quiet && <p className="briefing-quiet">Nothing else on today.</p>}
+    </section>
+  );
 }
 
 function untilLabel(iso: string | null): string {

@@ -8,6 +8,12 @@ const PATHS = {
   send: "M4 12 20 4l-4 16-4-7zM12 13l8-9",
   play: "M8 5.5v13l10-6.5z",
   telegram: "M21 4 3 11l6 2 2 6 3-4 5 4z",
+  clear: "M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM12 1.5v2M12 20.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M1.5 12h2M20.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4",
+  cloudy: "M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9z",
+  fog: "M4 10h16M3 14h18M5 18h14",
+  rain: "M20 16.6A5 5 0 0 0 18 7h-1.3A8 8 0 1 0 4 15.3M8 14v6M12 16v6M16 14v6",
+  snow: "M20 16.6A5 5 0 0 0 18 7h-1.3A8 8 0 1 0 4 15.3M8 15h.01M8 19h.01M12 17h.01M12 21h.01M16 15h.01M16 19h.01",
+  storm: "M19 16.9A5 5 0 0 0 18 7h-1.3A8 8 0 1 0 5 16.3M13 11l-4 6h6l-4 6",
 } as const;
 
 export type IconName = keyof typeof PATHS;

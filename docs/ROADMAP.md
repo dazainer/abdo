@@ -74,6 +74,10 @@ Split in two so each half ships on its own.
 - **Groceries+:** "we're out of X", who's going shopping, expiry tracking for perishables.
 - **Polls:** "where are we eating?"
 - **Buses:** GRT/ION next departures (GRT publishes GTFS + GTFS-realtime; verify access when speccing).
+- **Travel mode (keep it simple):** a status can carry a city ("away in Montreal till Sunday").
+  Abdo geocodes it (Open-Meteo geocoding: free, no key). Until the status ends, *that person's*
+  prayer notifications, Today prayer times, and briefing weather use the city. Everyone else
+  and the room speaker stay on the suite's location. No GPS tracking.
 
 ### Phase 8: The room device, outline
 **8a: Prove it on Zain's Mac (no purchase)**

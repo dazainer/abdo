@@ -143,6 +143,10 @@ Prayers: Dhuhr 1:12 p.m., Asr 3:52, Maghrib 6:30, Isha 7:51
 
 ## 7. Web app
 
+- **Briefing card** at the top of Today (added after the first live briefing: the
+  notification alone left nothing to come back to). `briefing.gather()` returns the briefing
+  as data; `GET /api/briefing` serves it live, and `render_text()` builds the notification
+  and Telegram text from the same data. Statuses and prayers stay in their own sections.
 - **Today tab** (replaces Calendar; route `/today`, old `/calendar` redirects): roommates' statuses
   (with "Set my status" / "Clear"), today's prayer times (next one highlighted), my upcoming
   reminders (cancel), then the 7-day calendar as now.

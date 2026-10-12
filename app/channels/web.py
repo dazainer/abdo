@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from app import auth, calendar_svc, db, notify, prayer, push, stt, tts, turn
+from app import auth, briefing, calendar_svc, db, notify, prayer, push, stt, tts, turn
 from app.config import settings
 from app.tools import TimeError_, event_when, read_calendar, resolve_until
 
@@ -290,6 +290,12 @@ async def today(member=Depends(current_member)):
                   "set_by": r["created_by_name"] if r["created_by"] not in (None, member["id"]) else None}
                  for r in await db.upcoming_reminders(member["id"])]
     return {"statuses": statuses, "prayers": prayers, "reminders": reminders}
+
+
+@router.get("/briefing")
+async def get_briefing(member=Depends(current_member)):
+    """The member's briefing, live (the same data the 8:00 notification is rendered from)."""
+    return await briefing.gather(member)
 
 
 @router.put("/status", dependencies=[Depends(same_origin)])

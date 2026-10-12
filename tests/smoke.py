@@ -1698,6 +1698,16 @@ async def test_briefing_build():
         check("roommates' statuses", "Mo: away" in body)
         check("remaining prayers", "Prayers: " in body and "Isha" in body)
 
+        b = await briefing.gather(ZAIN, now)
+        check("structured weather for the app card", b["weather"] == {
+            "temp": 3, "feels": -1, "sky": "light snow", "kind": "snow", "high": 5, "low": -2, "rain": 60})
+        check("structured events/packages/groceries",
+              b["events"] == [{"summary": "Suite dinner", "time": "19:00"}] and b["waiting"] == ["desk lamp"]
+              and b["groceries"] == 1 and b["calendar_ok"] is True)
+        check("greeting follows the time of day",
+              briefing.greeting(now) == "صباح الخير" and briefing.greeting(now.replace(hour=15)) == "أهلاً"
+              and briefing.greeting(now.replace(hour=20)) == "مساء الخير")
+
         briefing._fetch_weather, briefing._weather_cache = bad, None
         _, body = await briefing.build(ZAIN, now)
         check("weather failure -> line omitted, not invented", "Weather" not in body)
@@ -1757,6 +1767,22 @@ def test_web_today():
 
         check("cancel someone else's reminder -> 404", c.delete(f"/api/reminders/{r2}", headers=H).status_code == 404)
         check("cancel mine", c.delete(f"/api/reminders/{r1}", headers=H).status_code == 200)
+
+        from app import briefing as _briefing
+        real_fetch = _briefing._fetch_weather
+
+        async def no_weather():
+            raise RuntimeError("offline")
+
+        _briefing._fetch_weather, _briefing._weather_cache = no_weather, None
+        try:
+            b = c.get("/api/briefing").json()
+            check("briefing endpoint: live data for the logged-in member",
+                  b["name"] == "زين" and "events" in b and "prayers" in b and b["weather"] is None)
+        finally:
+            _briefing._fetch_weather, _briefing._weather_cache = real_fetch, None
+        check("briefing needs a session", TestClient(app_main.app, base_url="https://testserver")
+              .get("/api/briefing").status_code == 401)
 
         check("prefs default", c.get("/api/me/prefs").json()["prefs"]["briefing_time"] == "08:00")
         r = c.patch("/api/me/prefs", json={"briefing_time": "07:30", "prayers": False}, headers=H)

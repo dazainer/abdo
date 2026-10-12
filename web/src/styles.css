@@ -431,6 +431,69 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .cal-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; justify-content: center; }
 .cal-time { color: var(--text-soft); font-variant-numeric: tabular-nums; margin-inline-end: 8px; }
 
+/* ---- the morning briefing: Abdo speaking, so it's on enamel ----------------------- */
+
+.briefing {
+  margin: 12px 0 8px;
+  padding: 18px 20px 16px;
+  border-radius: 18px;
+  box-shadow:
+    inset 0 0 0 5px var(--plate),
+    inset 0 0 0 7px rgba(246, 247, 244, 0.85);
+}
+.briefing-title {
+  margin: 0;
+  font-family: var(--font-sign);
+  font-size: var(--t-title);
+  font-weight: 700;
+  line-height: 1.5;
+}
+.briefing-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.briefing-day { margin: 0; font-size: var(--t-small); opacity: 0.85; }
+.briefing-deg { font-size: 0.55em; vertical-align: 0.75em; margin-inline-start: -0.15em; }
+
+.briefing-weather {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(246, 247, 244, 0.25);
+}
+.briefing-icon svg { width: 34px; height: 34px; color: var(--gold); }
+.briefing-temp {
+  font-family: var(--font-sign);
+  font-size: 2.75rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.briefing-sky { display: flex; flex-direction: column; font-size: var(--t-small); line-height: 1.35; opacity: 0.92; }
+.briefing-sky-main { font-size: var(--t-body); font-weight: 600; opacity: 1; }
+.briefing-sky-main::first-letter { text-transform: uppercase; }
+
+.briefing-rows { margin: 0; }
+.briefing-row {
+  display: grid;
+  grid-template-columns: 86px 1fr;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(246, 247, 244, 0.25);
+}
+.briefing-row dt { color: var(--gold); font-weight: 600; font-size: var(--t-small); padding-top: 2px; }
+.briefing-row dd { margin: 0; }
+.briefing-line { display: block; }
+.briefing-time { font-variant-numeric: tabular-nums; margin-inline-end: 8px; opacity: 0.85; }
+.briefing-link { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.briefing-quiet { margin: 6px 0 0; padding-top: 10px; border-top: 1px solid rgba(246, 247, 244, 0.25); opacity: 0.9; }
+
 /* ---- prayer times: a small enamel timetable, the next prayer lit in gold ---------- */
 
 .prayers {
