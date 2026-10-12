@@ -122,8 +122,8 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   prompt writes numbers as words and spells codes out (dictation carve-out: no filler inside a
   password/code). ElevenLabs is the biggest running cost: prefer pre-recorded clips and the
   TTS cache (Phase 8) over new synthesis.
-- **`sendVoice` needs OGG/Opus; ElevenLabs returns MP3** → ffmpeg transcode (`nixpacks.toml`
-  `aptPkgs`). An MP3 sent to `sendVoice` won't render as a voice note.
+- **`sendVoice` needs OGG/Opus; ElevenLabs returns MP3** → ffmpeg transcode (installed
+  in the `Dockerfile`). An MP3 sent to `sendVoice` won't render as a voice note.
 - **Pinned dependencies**: bump versions deliberately and re-run the smoke suite. `anthropic`
   1.x moves to `httpx2` and is a separate migration. Frontend versions are pinned in
   `web/package-lock.json` (React Router 7, TypeScript 5.9 on purpose).
