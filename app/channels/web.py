@@ -415,8 +415,11 @@ async def schedule_extract(body: ExtractIn, member=Depends(current_member)):
         items = await timetable.extract(body.text)
     except timetable.TimetableError as e:
         raise HTTPException(400, str(e))
-    start, end = timetable.term_guess(items)
-    return {"classes": items, "term_start": start, "term_end": end}
+    weekly, one_offs = timetable.split_one_offs(items)
+    start, end = timetable.term_guess(weekly)
+    return {"classes": weekly, "term_start": start, "term_end": end,
+            "skipped": [f"{i.get('course', '').upper()} {i.get('kind', '').upper()}".strip()
+                        + (f" on {i['start_date']}" if i.get("start_date") else "") for i in one_offs]}
 
 
 @router.put("/schedule", dependencies=[Depends(same_origin)])

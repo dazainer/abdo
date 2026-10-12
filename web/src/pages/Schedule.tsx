@@ -71,6 +71,7 @@ function Importer({ hasExisting, onDone, toast }: {
   const [proposed, setProposed] = useState<ProposedClass[] | null>(null);
   const [termStart, setTermStart] = useState("");
   const [termEnd, setTermEnd] = useState("");
+  const [skipped, setSkipped] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   async function read() {
@@ -81,6 +82,7 @@ function Importer({ hasExisting, onDone, toast }: {
       setProposed(res.classes);
       setTermStart(res.term_start);
       setTermEnd(res.term_end);
+      setSkipped(res.skipped);
       if (!res.classes.length) setError("Abdo couldn't find any classes in that. Check you copied the list view.");
     } catch (err) {
       setError(errorText(err, "Couldn't read that schedule."));
@@ -132,6 +134,11 @@ function Importer({ hasExisting, onDone, toast }: {
     <section className="section" aria-labelledby="review">
       <h2 className="section-title" id="review">Check before saving</h2>
       <p className="section-note">Remove anything wrong. Saving replaces your current classes.</p>
+      {skipped.length > 0 && (
+        <p className="notice">
+          Left out (one-time, not weekly): {skipped.join("; ")}. Add tests like these under Exams on Today.
+        </p>
+      )}
       <div className="term-row">
         <label className="row-meta" htmlFor="ts">Term starts</label>
         <label className="row-meta" htmlFor="te">Term ends</label>

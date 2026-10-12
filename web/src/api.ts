@@ -253,7 +253,8 @@ export const api = {
 
   schedule: () => request<{ classes: SavedClass[] }>("GET", "/api/schedule"),
   extractSchedule: (text: string) =>
-    request<{ classes: ProposedClass[]; term_start: string; term_end: string }>("POST", "/api/schedule/extract", { text }),
+    request<{ classes: ProposedClass[]; term_start: string; term_end: string; skipped: string[] }>(
+      "POST", "/api/schedule/extract", { text }),
   saveSchedule: (classes: ProposedClass[], term_start: string, term_end: string) =>
     request<{ saved: number }>("PUT", "/api/schedule", { classes, term_start: term_start || null, term_end: term_end || null }),
   exams: () => request<{ exams: Exam[] }>("GET", "/api/exams"),

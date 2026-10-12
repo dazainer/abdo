@@ -46,15 +46,31 @@ REFUSAL_REPLY = "معلش، دي مش هقدر أساعد فيها. لو في ح
 TOO_LONG_REPLY = "آسف، الطلب ده طوّل عليّا شوية. ممكن نقسّمه خطوة خطوة؟"
 
 
-def _history_messages(rows) -> list[dict]:
-    """Stored turns -> API messages. User turns carry the speaker's name so Abdo can
-    follow shared threads (a group chat, the room); assistant turns stay bare.
-    The API needs the first message to be a user turn, so a leading assistant row
-    (cut off by the history limit) is dropped."""
+# History is short-term memory, not a to-do list: older turns are dropped, and every user
+# turn carries its time so a question 40 minutes later doesn't read like the next line of
+# an unfinished exchange (Abdo used to re-offer things the person had already dropped).
+HISTORY_LIMIT = 10
+HISTORY_MAX_AGE = timedelta(hours=3)
+
+
+def _stamp(created_at, tz) -> str:
+    return f"[{created_at.astimezone(tz).strftime('%H:%M')}] " if created_at is not None else ""
+
+
+def _history_messages(rows, now: datetime | None = None, tz=None) -> list[dict]:
+    """Stored turns -> API messages. User turns carry their time and speaker
+    ("[13:41] Mo: ...") so Abdo can follow shared threads and see elapsed time; assistant
+    turns stay bare. Turns older than HISTORY_MAX_AGE are dropped. The API needs the first
+    message to be a user turn, so a leading assistant row is dropped too."""
+    tz = tz or ZoneInfo(settings.timezone)
     msgs = []
     for r in rows:
+        created = r["created_at"] if "created_at" in r.keys() else None
+        if now is not None and created is not None and now - created > HISTORY_MAX_AGE:
+            continue
         if r["role"] == "user":
-            msgs.append({"role": "user", "content": f"{r['speaker'] or 'Someone'}: {r['content']}"})
+            msgs.append({"role": "user",
+                         "content": f"{_stamp(created, tz)}{r['speaker'] or 'Someone'}: {r['content']}"})
         elif msgs:
             msgs.append({"role": "assistant", "content": r["content"]})
     return msgs
@@ -80,14 +96,14 @@ async def think(member, thread: str, user_text: str, *, channel: str = "telegram
     name = member["name"] if member else "Someone"
     member_id = member["id"] if member else None
 
-    history = await db.recent_messages(thread, limit=10)
-    messages = _history_messages(history)
-    messages.append({"role": "user", "content": f"{name}: {user_text}"})
+    tz = ZoneInfo(settings.timezone)
+    now = datetime.now(tz)
+    history = await db.recent_messages(thread, limit=HISTORY_LIMIT)
+    messages = _history_messages(history, now, tz)
+    messages.append({"role": "user", "content": f"{_stamp(now, tz)}{name}: {user_text}"})
 
     # Built once per turn and never changed between tool rounds: thinking blocks are
     # only valid while everything sent before them is unchanged.
-    tz = ZoneInfo(settings.timezone)
-    now = datetime.now(tz)
     soon = await db.exams_between(now - timedelta(hours=3), now + timedelta(days=2))
     system = build_system_prompt(member_name=name, roster=await db.roster_string(),
                                  channel=channel, voice=voice,

@@ -10,6 +10,7 @@ names, ids, or coordinates.
 """
 import asyncio
 import hashlib
+import re
 import os
 import sys
 from types import SimpleNamespace
@@ -278,7 +279,7 @@ class FakeDB:
 
     async def recent_messages(self, thread, limit=10):
         rows = [r for r in self.logged if r["thread"] == thread][-limit:]
-        return [{"role": r["role"], "content": r["content"],
+        return [{"role": r["role"], "content": r["content"], "created_at": r.get("created_at"),
                  "speaker": NAMES.get(r["member_id"])} for r in rows]
 
     # facts
@@ -578,7 +579,8 @@ async def test_handle_turn_logs_and_speakers():
     sent = brain.client.messages.requests[0]["messages"]
     check("earlier user turn prefixed with its speaker", sent[0]["content"] == "Mo: مين جاي النهاردة؟")
     check("assistant turn left bare", sent[1] == {"role": "assistant", "content": "مفيش حد مسجّل."})
-    check("current turn prefixed with the speaker", sent[-1]["content"] == "Zain: hi abdo")
+    check("current turn prefixed with time + speaker",
+          re.fullmatch(r"\[\d\d:\d\d\] Zain: hi abdo", sent[-1]["content"]) is not None)
     check("current message sent exactly once (no duplicate from early logging)",
           sum("hi abdo" in str(m["content"]) for m in sent) == 1)
     new = fake.logged[-2:]
@@ -589,6 +591,28 @@ async def test_handle_turn_logs_and_speakers():
               and r["modality"] == "text" for r in new))
     check("other threads are not mixed in",
           not any("private DM" in str(m["content"]) for m in sent))
+
+
+async def test_history_time_and_age():
+    print("Scenario: history carries times and drops old turns (no stale to-dos)")
+    now = datetime(2026, 10, 12, 14, 22, tzinfo=TZ)
+    rows = [
+        {"role": "user", "content": "add the study session at 2?", "speaker": "Zain",
+         "created_at": now - timedelta(hours=4)},
+        {"role": "assistant", "content": "أضيفها؟", "speaker": "Zain", "created_at": now - timedelta(hours=4)},
+        {"role": "user", "content": "eggs $7, split four ways", "speaker": "Zain",
+         "created_at": now - timedelta(minutes=35)},
+        {"role": "assistant", "content": "تمام، سجلت البيض.", "speaker": "Zain", "created_at": now - timedelta(minutes=35)},
+    ]
+    msgs = brain._history_messages(rows, now, TZ)
+    check("turns older than 3 hours are dropped", len(msgs) == 2 and "study session" not in str(msgs))
+    check("user turns carry their time", msgs[0]["content"] == "[13:47] Zain: eggs $7, split four ways")
+    check("assistant turns stay bare", msgs[1]["content"] == "تمام، سجلت البيض.")
+    p = prompts.STATIC_PERSONA
+    check("persona: newest message only, no re-offering dropped things",
+          "Answer the NEWEST message only" in p and "never ask to do it again" in p)
+    v = prompts.VOICE_HINT
+    check("voice: money stays exact in words", "$1.75" in v and "never" in v)
 
 
 async def test_history_drops_leading_assistant():
@@ -631,7 +655,7 @@ async def test_unidentified_speaker():
     fake.shopping = []
     reply = await brain.think(None, "room", "eh el na2es?", channel="room")
     first = brain.client.messages.requests[0]
-    check("unknown speaker prefixed 'Someone:'", first["messages"][-1]["content"] == "Someone: eh el na2es?")
+    check("unknown speaker prefixed 'Someone:'", first["messages"][-1]["content"].endswith("Someone: eh el na2es?"))
     check("room channel described in context", "room speaker" in sys_text(first["system"]))
     check("tools still run without a member id", reply == "الليستة فاضية.")
 
@@ -1080,7 +1104,7 @@ def test_prompt_content():
     check("Egyptian dialect glossary present (معنديش)", "معنديش" in p)
     check("mirrors the speaker's language mix", "mirror the person" in p)
     check("packages capability described", "packages" in p and "get_packages" in p)
-    check("speaker-prefix convention explained", "starts with the speaker's name" in p)
+    check("speaker-prefix convention explained", "starts with the time and the speaker's name" in p)
     check("web search defers to household memory", "search the web" in p and "recall_facts" in p)
     check("dogs are gone", "dog" not in p.lower())
     check("money is CAD", "Canadian dollars" in p)
@@ -1367,7 +1391,7 @@ def test_web_app():
         check("chat goes through handle_turn and returns the reply", r.json() == {"reply": "أهلاً من الويب"})
         sent_msgs = brain.client.messages.requests[0]["messages"]
         check("web chat shares the Telegram DM history (dm:<id>)",
-              sent_msgs[0]["content"] == "Zain: from telegram")
+              sent_msgs[0]["content"].endswith("Zain: from telegram"))
         check("web turn logged with channel=web on dm:1",
               [(x["thread"], x["channel"]) for x in fake.logged[-2:]] == [("dm:1", "web"), ("dm:1", "web")])
         h = client.get("/api/chat/history").json()
@@ -2130,6 +2154,20 @@ def test_timetable_validate():
     check("bad rows rejected with reasons", len(problems) == 3 and "ends before it starts" in problems[0])
     check("term guess = most common dates", timetable.term_guess(QUEST_ITEMS) == ("2026-09-09", "2026-12-08"))
 
+    tst = {"course": "CS 245", "section": "201", "kind": "TST", "days": ["Thu"], "start": "16:30", "end": "18:20",
+           "room": "", "start_date": "2026-10-29", "end_date": "2026-10-29"}
+    one_day = {**QUEST_ITEMS[0], "kind": "LEC", "start_date": "2026-11-02", "end_date": "2026-11-02"}
+    weekly, once = timetable.split_one_offs(QUEST_ITEMS + [tst, one_day])
+    check("TST slots and one-day rows are one-offs, not weekly", len(weekly) == 2 and once == [tst, one_day])
+    rows, problems = timetable.validate(QUEST_ITEMS + [tst], date(2026, 9, 9), date(2026, 12, 8))
+    check("validate never saves a TST as a weekly class", len(rows) == 4 and not problems)
+    swapped = [{**QUEST_ITEMS[0], "start_date": "2026-09-09", "end_date": "2026-08-12"}]
+    _, problems = timetable.validate(swapped)
+    check("a day/month mix-up is caught, not saved", problems and "day/month order" in problems[0])
+    too_long = [{**QUEST_ITEMS[0], "start_date": "2026-09-09", "end_date": "2027-08-12"}]
+    _, problems = timetable.validate(too_long)
+    check("an implausible term length is caught", problems and "looks wrong" in problems[0])
+
     tz = TZ
     d = date(2026, 10, 14)
     w = (datetime.combine(d, dtime(8), tz), datetime.combine(d, dtime(23), tz))
@@ -2267,9 +2305,13 @@ def test_web_schedule():
         c.post("/api/auth/request-code", json={"name": "Zain"}, headers=H)
         c.post("/api/auth/verify", json={"name": "Zain", "code": re.search(r"\b(\d{6})\b", dms[-1]).group(1)}, headers=H)
 
-        brain.client = FakeClient([_resp("end_turn", [_text_block(_json.dumps({"classes": QUEST_ITEMS}))])])
+        tst = {"course": "CS 245", "section": "201", "kind": "TST", "days": ["Thu"], "start": "16:30",
+               "end": "18:20", "room": "", "start_date": "2026-10-29", "end_date": "2026-10-29"}
+        brain.client = FakeClient([_resp("end_turn", [_text_block(_json.dumps({"classes": QUEST_ITEMS + [tst]}))])])
         r = c.post("/api/schedule/extract", json={"text": "MATH 136 ... pasted from Quest ..."}, headers=H)
         j = r.json()
+        check("one-off TST left out of the proposal and reported", j["skipped"] == ["CS 245 TST on 2026-10-29"]
+              and all(x["kind"] != "TST" for x in j["classes"]))
         check("extract proposes rows + term guess, saves nothing",
               r.status_code == 200 and len(j["classes"]) == 2 and j["term_start"] == "2026-09-09" and fake.classes == [])
         r = c.put("/api/schedule", json={"classes": j["classes"]}, headers=H)
@@ -2312,6 +2354,7 @@ async def main():
     test_static_persona_cache_invariant()
     await test_handle_turn_logs_and_speakers()
     await test_history_drops_leading_assistant()
+    await test_history_time_and_age()
     await test_handle_turn_voice_and_failure()
     await test_unidentified_speaker()
     await test_refusal_handled()

@@ -40,7 +40,7 @@ from app.channels import web as web_channel  # noqa: E402
 
 # Bump this with each deploy-worth change. Surfaced at GET /api/health so we can
 # confirm from outside exactly which code Railway is actually running.
-VERSION = "2026-10-12-schedules"
+VERSION = "2026-10-12-schedules-2"
 
 # The built React app (web/dist). Absent in a backend-only checkout: then GET /
 # falls back to the health JSON.

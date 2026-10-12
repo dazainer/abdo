@@ -161,7 +161,14 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   field in code, the member reviews, and only `PUT /api/schedule` saves (replacing their
   classes). Extraction is rate-limited (10/hour/member). Free time (`who_is_free`) is computed
   in code from classes (weekday + term range), exams (2 h if no end), and travel ("away" members
-  don't block "together"). Exams are quiz/midterm/final only and always shared.
+  don't block "together"). Exams are quiz/midterm/final only and always shared. One-off rows
+  (Quest `TST` slots, or first day == last day) are dropped IN CODE (`split_one_offs`), and a
+  term must be 2 weeks to 7 months long: Quest dates can be DD/MM or MM/DD depending on the
+  student's settings, and that guard catches a swap.
+- **History is short-term memory, not a to-do list**: `brain._history_messages` keeps the last
+  10 turns from the last 3 hours, user turns stamped "[HH:MM] Name:". The persona says answer
+  the newest message only. Without this, Abdo re-offered things the person had dropped and
+  "corrected" old replies unprompted. Next lever if he still drifts: `EFFORT = "medium"`.
 - **`where_is` returns location AND status** (computed in code): the model once ignored a
   status in its context and answered "where's Zain?" with "not sharing location".
 - **Prayer times are computed locally** (`prayer.py`, adhanpy, ISNA + standard Asr via

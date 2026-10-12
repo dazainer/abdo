@@ -86,7 +86,7 @@ async def recent_messages(thread: str, limit: int = 10):
     """The last `limit` turns of a thread, oldest first, with the speaker's name."""
     async with _pool.acquire() as con:
         rows = await con.fetch(
-            "SELECT m.role, m.content, mem.name AS speaker "
+            "SELECT m.role, m.content, m.created_at, mem.name AS speaker "
             "FROM messages m LEFT JOIN members mem ON mem.id = m.member_id "
             "WHERE m.thread = $1 ORDER BY m.created_at DESC, m.id DESC LIMIT $2",
             thread, limit,

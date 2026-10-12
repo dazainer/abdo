@@ -58,9 +58,12 @@ EXTRACT_PROMPT = (
     "the University of Waterloo's Quest, list view). One item per meeting pattern: a lecture "
     "on MWF 10:30AM - 11:20AM is ONE item with days [Mon, Wed, Fri]. Quest day codes: M=Mon, "
     "T=Tue, W=Wed, Th=Thu, F=Fri, S=Sat, Su=Sun ('TTh' = Tue + Thu). Convert times to 24-hour "
-    "HH:MM. Dates in Quest are MM/DD/YYYY: convert to YYYY-MM-DD. Skip rows marked TBA, "
-    "online/asynchronous rows without times, and dropped courses. Don't invent anything: use "
-    "'' for a field that isn't in the text."
+    "HH:MM. Dates may be DD/MM/YYYY or MM/DD/YYYY depending on the student's settings: decide "
+    "from the whole schedule (a number over 12 must be the day; a term runs about four months, "
+    "e.g. September to December) and convert to YYYY-MM-DD. Skip rows marked TBA, online/"
+    "asynchronous rows without times, and dropped courses. Include TST rows and one-day rows "
+    "as they appear (they're filtered later). Don't invent anything: use '' for a field that "
+    "isn't in the text."
 )
 
 
@@ -98,6 +101,23 @@ async def extract(text: str) -> list[dict]:
         raise TimetableError("couldn't read that schedule; try again")
 
 
+def is_one_off(item: dict) -> bool:
+    """TST slots and anything whose first and last day are the same date happen once, not
+    weekly (Quest lists a midterm TST slot like a class). They never become weekly classes."""
+    kind = (item.get("kind") or "").strip().upper()
+    start, end = (item.get("start_date") or "").strip(), (item.get("end_date") or "").strip()
+    return kind == "TST" or (bool(start) and start == end)
+
+
+def split_one_offs(items: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(weekly items, one-off items) — done in code, whatever the model returned."""
+    weekly = [i for i in items if not is_one_off(i)]
+    return weekly, [i for i in items if is_one_off(i)]
+
+
+MIN_TERM, MAX_TERM = timedelta(days=14), timedelta(days=214)
+
+
 def _hhmm(value: str) -> time:
     try:
         h, m = (int(x) for x in (value or "").strip().split(":"))
@@ -122,6 +142,7 @@ def validate(items: list[dict], term_start: date | None = None,
     term dates take term_start/term_end (the preview lets the member set them). Every row
     is re-checked here, whatever the model or the browser sent."""
     rows, problems = [], []
+    items, _ = split_one_offs(items)        # defence in depth: one-offs never save as weekly
     for i, it in enumerate(items, 1):
         label = (it.get("course") or f"row {i}").strip()
         try:
@@ -139,7 +160,9 @@ def validate(items: list[dict], term_start: date | None = None,
             if not ts or not te:
                 raise TimetableError("no term dates (set them above)")
             if te < ts:
-                raise TimetableError("term ends before it starts")
+                raise TimetableError("term ends before it starts (check the day/month order)")
+            if not MIN_TERM <= te - ts <= MAX_TERM:
+                raise TimetableError(f"a term from {ts} to {te} looks wrong (check the day/month order)")
             for d in sorted(set(days), key=DAYS.index):
                 rows.append({"course": course, "section": (it.get("section") or "").strip() or None,
                              "kind": (it.get("kind") or "").strip().upper() or None,
