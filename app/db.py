@@ -466,20 +466,21 @@ async def create_poll(question: str, options: list[str], created_by) -> int:
         )
 
 
-async def polls_recent(closed_within_days: int = 3):
-    """Open polls plus ones closed recently, newest first, with the creator's name."""
+async def polls_recent(closed_within_hours: int = 24):
+    """Open polls plus ones closed in the last day (then they drop off), newest first,
+    with the creator's name. Deleted polls never show."""
     async with _pool.acquire() as con:
         return await con.fetch(
             "SELECT p.*, m.name AS created_by_name FROM polls p LEFT JOIN members m ON m.id = p.created_by "
-            "WHERE NOT p.closed OR p.closed_at > now() - make_interval(days => $1) "
+            "WHERE NOT p.deleted AND (NOT p.closed OR p.closed_at > now() - make_interval(hours => $1)) "
             "ORDER BY p.closed, p.created_at DESC",
-            closed_within_days,
+            closed_within_hours,
         )
 
 
 async def get_poll(poll_id: int):
     async with _pool.acquire() as con:
-        return await con.fetchrow("SELECT * FROM polls WHERE id = $1", poll_id)
+        return await con.fetchrow("SELECT * FROM polls WHERE id = $1 AND NOT deleted", poll_id)
 
 
 async def poll_votes(poll_ids: list[int]):
@@ -498,6 +499,25 @@ async def cast_vote(poll_id: int, member_id: int, option_index: int) -> None:
             "ON CONFLICT (poll_id, member_id) DO UPDATE SET option_index = $3, voted_at = now()",
             poll_id, member_id, option_index,
         )
+
+
+async def remove_vote(poll_id: int, member_id: int) -> bool:
+    async with _pool.acquire() as con:
+        result = await con.execute(
+            "DELETE FROM poll_votes v USING polls p WHERE v.poll_id = $1 AND v.member_id = $2 "
+            "AND p.id = v.poll_id AND NOT p.closed", poll_id, member_id,
+        )
+    return not result.endswith(" 0")
+
+
+async def delete_poll(poll_id: int, member_id: int) -> bool:
+    """Remove a poll for everyone, only by whoever asked it."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "UPDATE polls SET deleted = true WHERE id = $1 AND NOT deleted AND created_by = $2 RETURNING id",
+            poll_id, member_id,
+        )
+    return row is not None
 
 
 async def close_poll(poll_id: int, member_id: int) -> bool:

@@ -280,6 +280,20 @@ async def poll_vote(poll_id: int, body: VoteIn, member=Depends(current_member)):
     return {"ok": True}
 
 
+@router.delete("/polls/{poll_id}/vote", dependencies=[Depends(same_origin)])
+async def poll_unvote(poll_id: int, member=Depends(current_member)):
+    if not await db.remove_vote(poll_id, member["id"]):
+        raise HTTPException(404, "no vote of yours in an open poll with that id")
+    return {"ok": True}
+
+
+@router.delete("/polls/{poll_id}", dependencies=[Depends(same_origin)])
+async def poll_delete(poll_id: int, member=Depends(current_member)):
+    if not await db.delete_poll(poll_id, member["id"]):
+        raise HTTPException(404, "no poll of yours with that id")
+    return {"ok": True}
+
+
 @router.post("/polls/{poll_id}/close", dependencies=[Depends(same_origin)])
 async def poll_close(poll_id: int, member=Depends(current_member)):
     if not await db.close_poll(poll_id, member["id"]):

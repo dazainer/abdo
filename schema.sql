@@ -244,10 +244,11 @@ CREATE TABLE polls (
     created_by  INTEGER REFERENCES members(id),
     closed      BOOLEAN NOT NULL DEFAULT false,
     closed_at   TIMESTAMPTZ,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted     BOOLEAN NOT NULL DEFAULT false      -- removed by the asker (gone for everyone)
 );
 
--- One vote per member per poll; voting again changes it.
+-- One vote per member per poll; voting again changes it, and it can be removed.
 CREATE TABLE poll_votes (
     poll_id       BIGINT NOT NULL REFERENCES polls(id),
     member_id     INTEGER NOT NULL REFERENCES members(id),

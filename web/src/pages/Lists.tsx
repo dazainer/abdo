@@ -205,10 +205,22 @@ function Polls({ toast }: { toast: (msg: string) => void }) {
 
   async function vote(p: Poll, i: number) {
     try {
-      await api.vote(p.id, i);
+      // Tapping your current choice again takes the vote back.
+      if (p.my_vote === i) await api.unvote(p.id);
+      else await api.vote(p.id, i);
       await qc.invalidateQueries({ queryKey: ["polls"] });
     } catch (err) {
       toast(errorText(err, "Couldn't vote."));
+    }
+  }
+
+  async function remove(p: Poll) {
+    if (!window.confirm(`Delete "${p.question}" for everyone?`)) return;
+    try {
+      await api.deletePoll(p.id);
+      await qc.invalidateQueries({ queryKey: ["polls"] });
+    } catch (err) {
+      toast(errorText(err, "Couldn't delete it."));
     }
   }
 
@@ -226,19 +238,36 @@ function Polls({ toast }: { toast: (msg: string) => void }) {
   return (
     <section className="section" aria-labelledby="polls">
       <h2 className="section-title" id="polls">Polls</h2>
-      {polls.map((p) => {
+      {polls.filter((p) => p.closed).map((p) => {
+        // Closed polls shrink to one results line and drop off after a day.
+        const top = Math.max(0, ...p.options.map((o) => o.count));
+        const winners = p.options.filter((o) => top > 0 && o.count === top).map((o) => o.text);
+        return (
+          <div className="row" key={p.id}>
+            <span className="row-main">
+              <span className="row-title">{p.question}</span>
+              <span className="row-meta">
+                Closed: {winners.length ? `${winners.join(" / ")} (${top} vote${top === 1 ? "" : "s"})` : "no votes"}
+              </span>
+            </span>
+            {p.mine && <button className="btn btn-quiet btn-small" onClick={() => void remove(p)}>Delete</button>}
+          </div>
+        );
+      })}
+      {polls.filter((p) => !p.closed).map((p) => {
         const total = p.options.reduce((a, o) => a + o.count, 0);
         return (
           <div className="poll" key={p.id}>
             <p className="poll-q">{p.question}</p>
             <p className="row-meta">
               {p.created_by_name ? `Asked by ${p.mine ? "you" : p.created_by_name}. ` : ""}
-              {p.closed ? "Closed." : p.waiting_on.length ? `Waiting on ${p.waiting_on.join(", ")}.` : "Everyone voted."}
+              {p.waiting_on.length ? `Waiting on ${p.waiting_on.join(", ")}.` : "Everyone voted."}
+              {p.my_vote !== null && " Tap your choice again to remove your vote."}
             </p>
             <ul className="poll-options">
               {p.options.map((o, i) => (
                 <li key={i}>
-                  <button className={`poll-option${p.my_vote === i ? " chosen" : ""}`} disabled={p.closed}
+                  <button className={`poll-option${p.my_vote === i ? " chosen" : ""}`}
                           aria-pressed={p.my_vote === i} onClick={() => void vote(p, i)}>
                     <span className="poll-bar" style={{ width: total ? `${(o.count / total) * 100}%` : 0 }} />
                     <span className="poll-label">{o.text}</span>
@@ -248,8 +277,11 @@ function Polls({ toast }: { toast: (msg: string) => void }) {
                 </li>
               ))}
             </ul>
-            {p.mine && !p.closed && (
-              <button className="btn btn-quiet btn-small" onClick={() => void close(p)}>Close poll</button>
+            {p.mine && (
+              <div className="inline-form" style={{ margin: 0 }}>
+                <button className="btn btn-quiet btn-small" onClick={() => void close(p)}>Close poll</button>
+                <button className="btn btn-quiet btn-small" onClick={() => void remove(p)}>Delete</button>
+              </div>
             )}
           </div>
         );

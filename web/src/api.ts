@@ -274,6 +274,8 @@ export const api = {
   createPoll: (question: string, options: string[]) => request<{ id: number }>("POST", "/api/polls", { question, options }),
   vote: (id: number, option_index: number) => request<{ ok: true }>("POST", `/api/polls/${id}/vote`, { option_index }),
   closePoll: (id: number) => request<{ ok: true }>("POST", `/api/polls/${id}/close`),
+  unvote: (id: number) => request<{ ok: true }>("DELETE", `/api/polls/${id}/vote`),
+  deletePoll: (id: number) => request<{ ok: true }>("DELETE", `/api/polls/${id}`),
 
   packages: () => request<{ packages: Package[] }>("GET", "/api/packages"),
   addPackage: (p: { description: string; owner?: string; carrier?: string; day?: string }) =>

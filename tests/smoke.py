@@ -213,12 +213,28 @@ class FakeDB:
                            "created_at": datetime.now(timezone.utc)})
         return self._poll_seq
 
-    async def polls_recent(self, closed_within_days=3):
-        rows = [{**p, "created_by_name": NAMES.get(p["created_by"])} for p in self.polls]
+    async def polls_recent(self, closed_within_hours=24):
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=closed_within_hours)
+        rows = [{**p, "created_by_name": NAMES.get(p["created_by"])} for p in self.polls
+                if not p.get("deleted") and (not p["closed"] or (p["closed_at"] or cutoff) > cutoff)]
         return sorted(rows, key=lambda p: (p["closed"], -p["id"]))
 
     async def get_poll(self, poll_id):
-        return next((p for p in self.polls if p["id"] == poll_id), None)
+        return next((p for p in self.polls if p["id"] == poll_id and not p.get("deleted")), None)
+
+    async def remove_vote(self, poll_id, member_id):
+        poll = await self.get_poll(poll_id)
+        before = len(self.votes)
+        if poll and not poll["closed"]:
+            self.votes = [v for v in self.votes if not (v["poll_id"] == poll_id and v["member_id"] == member_id)]
+        return len(self.votes) < before
+
+    async def delete_poll(self, poll_id, member_id):
+        for p in self.polls:
+            if p["id"] == poll_id and not p.get("deleted") and p["created_by"] == member_id:
+                p["deleted"] = True
+                return True
+        return False
 
     async def poll_votes(self, poll_ids):
         return [{**v, "name": NAMES[v["member_id"]]} for v in self.votes if v["poll_id"] in poll_ids]
@@ -231,6 +247,7 @@ class FakeDB:
         for p in self.polls:
             if p["id"] == poll_id and not p["closed"] and p["created_by"] == member_id:
                 p["closed"] = True
+                p["closed_at"] = datetime.now(timezone.utc)
                 return True
         return False
 
@@ -426,7 +443,7 @@ for _name in ("get_member_by_telegram_id", "roster_string", "get_member_id_by_na
               "recent_settlements", "delete_expense", "delete_settlement",
               "replace_classes", "classes_for", "add_exam", "exams_between", "delete_exam",
               "add_pantry_item", "open_pantry", "use_pantry_item", "create_poll", "polls_recent",
-              "get_poll", "poll_votes", "cast_vote", "close_poll",
+              "get_poll", "poll_votes", "cast_vote", "close_poll", "remove_vote", "delete_poll",
               "log_message", "recent_messages", "add_fact", "nearest_fact", "update_fact",
               "search_facts", "upsert_location", "get_location", "get_all_locations",
               "add_shopping_item", "get_shopping_list", "mark_item_bought",
@@ -2457,8 +2474,20 @@ async def test_fridge_shopping_polls():
               and "everyone voted" in out)
         out = await tools.run_tool("close_poll", {}, member_id=2)
         check("only the asker can close", out.startswith("ERROR"))
+        out = await tools.run_tool("vote", {"remove": True}, member_id=3)
+        check("a vote can be taken back", out.startswith("Removed") and not any(v["member_id"] == 3 for v in fake.votes))
+        out = await tools.run_tool("vote", {"remove": True}, member_id=3)
+        check("removing a vote you don't have is honest", "hadn't voted" in out)
+        await tools.run_tool("vote", {"option": "Shawarma"}, member_id=3)
         out = await tools.run_tool("close_poll", {}, member_id=1)
         check("closing announces the winner", "Winner: Shawarma" in out)
+        fake.polls[-1]["closed_at"] = datetime.now(timezone.utc) - timedelta(hours=25)
+        check("closed polls drop off after a day", "Where are we eating?" not in await tools.run_tool("poll_results", {}, member_id=1))
+        await tools.run_tool("create_poll", {"question": "Temp?", "options": ["a", "b"]}, member_id=1)
+        out = await tools.run_tool("close_poll", {"delete": True}, member_id=2)
+        check("only the asker can delete a poll", out.startswith("ERROR"))
+        out = await tools.run_tool("close_poll", {"delete": True}, member_id=1)
+        check("asker deletes a poll for everyone", out.startswith("Deleted") and "Temp?" not in await tools.run_tool("poll_results", {}, member_id=2))
 
         await tools.run_tool("create_poll", {"question": "Movie night?", "options": ["Yes", "No"]}, member_id=2)
         brain.client = FakeClient(reply_only("ok"))
@@ -2526,8 +2555,13 @@ def test_web_fridge_polls():
         p = c.get("/api/polls").json()["polls"][0]
         check("poll shows my vote + who's left", p["my_vote"] == 1 and p["mine"] and "Mo" in p["waiting_on"])
         check("bad option -> 400", c.post(f"/api/polls/{pid}/vote", json={"option_index": 4}, headers=H).status_code == 400)
+        check("remove my vote", c.delete(f"/api/polls/{pid}/vote", headers=H).status_code == 200
+              and c.get("/api/polls").json()["polls"][0]["my_vote"] is None)
+        check("removing again -> 404", c.delete(f"/api/polls/{pid}/vote", headers=H).status_code == 404)
+        c.post(f"/api/polls/{pid}/vote", json={"option_index": 1}, headers=H)
         check("close my poll", c.post(f"/api/polls/{pid}/close", headers=H).status_code == 200)
         check("can't vote in a closed poll", c.post(f"/api/polls/{pid}/vote", json={"option_index": 0}, headers=H).status_code == 404)
+        check("delete my poll", c.delete(f"/api/polls/{pid}", headers=H).status_code == 200 and c.get("/api/polls").json()["polls"] == [])
     finally:
         telegram.send_message, notify.deliver = real_send, real_deliver
         settings.session_pepper = None

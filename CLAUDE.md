@@ -170,8 +170,9 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
 - **Fridge, shopping pings, polls** (`app/pantry.py`, `app/polls.py`): expiry labels computed in
   code; the briefing only shows shared items and your own (never someone else's food).
   "Going shopping" pings everyone else, max once per 30 min per person. Polls: single choice,
-  2-6 options, one changeable vote each, closed only by the asker. Open polls ride in Abdo's
-  context so "I want shawarma" becomes a vote.
+  2-6 options, one vote each (change it, or tap your choice again to take it back), closed or
+  deleted only by the asker. Closed polls shrink to a results line and drop off after 24 h. Open
+  polls ride in Abdo's context so "I want shawarma" becomes a vote.
 - **History is short-term memory, not a to-do list**: `brain._history_messages` keeps the last
   10 turns from the last 3 hours, user turns stamped "[HH:MM] Name:". The persona says answer
   the newest message only. Without this, Abdo re-offered things the person had dropped and

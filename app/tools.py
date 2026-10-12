@@ -508,13 +508,14 @@ TOOLS = [
     {
         "name": "vote",
         "description": (
-            "Vote in a poll (or change a vote): the option as said or its number. Defaults to the newest "
-            "open poll; pass poll_id if there are several."
+            "Vote in a poll, change a vote, or remove it: the option as said or its number, or "
+            "remove=true to take the vote back. Defaults to the newest open poll; pass poll_id if there are several."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"option": {"type": "string"}, "poll_id": {"type": "integer"}},
-            "required": ["option"],
+            "properties": {"option": {"type": "string"}, "poll_id": {"type": "integer"},
+                           "remove": {"type": "boolean", "description": "Take back the speaker's vote."}},
+            "required": [],
         },
     },
     {
@@ -524,8 +525,15 @@ TOOLS = [
     },
     {
         "name": "close_poll",
-        "description": "Close a poll (only whoever asked it). Defaults to their newest open poll.",
-        "input_schema": {"type": "object", "properties": {"poll_id": {"type": "integer"}}, "required": []},
+        "description": (
+            "Close a poll (only whoever asked it), or delete=true to remove it for everyone. "
+            "Defaults to their newest poll."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"poll_id": {"type": "integer"}, "delete": {"type": "boolean"}},
+            "required": [],
+        },
     },
     {
         "name": "add_package",
@@ -887,12 +895,24 @@ async def _poll_tool(name: str, tool_input: dict, member_id: int | None) -> str:
             t = pick()
             if t is None:
                 return "ERROR: there's no open poll to vote in."
+            if tool_input.get("remove"):
+                if await db.remove_vote(t["id"], member_id):
+                    return f"Removed their vote in poll #{t['id']}."
+                return f"They hadn't voted in poll #{t['id']}."
             idx = polls.match_option(t, tool_input.get("option"))
             if idx is None:
                 return (f"ERROR: '{tool_input.get('option')}' isn't one of the options ("
                         + ", ".join(o["text"] for o in t["options"]) + "). Ask which one.")
             await db.cast_vote(t["id"], member_id, idx)
             return f"Voted {t['options'][idx]['text']} in poll #{t['id']}."
+
+        if name == "close_poll" and tool_input.get("delete"):
+            pid = tool_input.get("poll_id")
+            mine = [t for t in await polls.overview() if t["created_by"] == member_id]
+            target = next((t for t in mine if t["id"] == pid), None) if pid is not None else (mine[0] if mine else None)
+            if target is None or not await db.delete_poll(target["id"], member_id):
+                return "ERROR: no poll of theirs to delete (only whoever asked can delete it)."
+            return f"Deleted poll #{target['id']} for everyone."
 
         if name == "close_poll":
             t = pick(want_mine=True)
