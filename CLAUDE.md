@@ -50,7 +50,8 @@ Claude.
 ```
 app/  → main.py (app setup, GET /api/health version, serves web/dist as an SPA, starts the
         scheduler), scheduler.py + notify.py + briefing.py + prayer.py (proactive Abdo),
-        money.py (cents math) + location.py (travel mode) + timetable.py (classes, free time),
+        money.py (cents math) + location.py (travel mode) + timetable.py (classes, free time) +
+        quest.py (Quest parser) + pantry.py (fridge, shopping pings) + polls.py,
         channels/telegram.py (webhook adapter), channels/web.py (/api for the web app),
         auth.py (Telegram-code login + sessions), push.py (web push), turn.py
         (handle_turn), brain.py (tool loop), prompts.py (static persona + dynamic context),
@@ -156,15 +157,21 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   location, each computed in its own timezone), Today prayer times, briefing weather, and
   `get_prayer_times` use the place. Everyone else stays home. `location_for()` is the single
   source of truth.
-- **Timetables** (`app/timetable.py`): a pasted Quest schedule goes through ONE structured-output
-  call (strict JSON schema, low effort) that only *proposes* rows; `validate()` re-checks every
-  field in code, the member reviews, and only `PUT /api/schedule` saves (replacing their
-  classes). Extraction is rate-limited (10/hour/member). Free time (`who_is_free`) is computed
+- **Timetables are parsed deterministically** (`app/quest.py`, no model): Quest's list view, with
+  fields on separate lines or tab rows, continuation rows (a second date inherits the section
+  above), DD/MM vs MM/DD decided per schedule, 24h or AM/PM. TST slots / one-day rows are
+  proposed as EXAMS; TBA/online and dropped/waitlisted courses are skipped with a reason.
+  Nothing saves until the member reviews; `validate()` re-checks every field; re-imports don't
+  duplicate exams. Test fixtures in `tests/fixtures/` copy the real structure with made-up
+  courses, rooms, and names: never commit a real schedule. Free time (`who_is_free`) is computed
   in code from classes (weekday + term range), exams (2 h if no end), and travel ("away" members
-  don't block "together"). Exams are quiz/midterm/final only and always shared. One-off rows
-  (Quest `TST` slots, or first day == last day) are dropped IN CODE (`split_one_offs`), and a
-  term must be 2 weeks to 7 months long: Quest dates can be DD/MM or MM/DD depending on the
-  student's settings, and that guard catches a swap.
+  don't block "together"). Exams are quiz/midterm/final only and always shared. A term must be
+  2 weeks to 7 months long (catches a day/month swap).
+- **Fridge, shopping pings, polls** (`app/pantry.py`, `app/polls.py`): expiry labels computed in
+  code; the briefing only shows shared items and your own (never someone else's food).
+  "Going shopping" pings everyone else, max once per 30 min per person. Polls: single choice,
+  2-6 options, one changeable vote each, closed only by the asker. Open polls ride in Abdo's
+  context so "I want shawarma" becomes a vote.
 - **History is short-term memory, not a to-do list**: `brain._history_messages` keeps the last
   10 turns from the last 3 hours, user turns stamped "[HH:MM] Name:". The persona says answer
   the newest message only. Without this, Abdo re-offered things the person had dropped and
@@ -235,7 +242,7 @@ The full plan, decisions log, and later-phase outlines are in `docs/ROADMAP.md`.
 - **Phase 6 (done, deployed 2026-10-11)** → `docs/abdo_phase6_webapp_spec.md`: web app (React
   PWA), Telegram-code login, shared DM thread, push infrastructure, Dockerfile.
 - **Phase 7a (current: deployed 2026-10-12; briefing card added after the first live briefing)** → `docs/abdo_phase7a_proactive_spec.md`:
-  scheduler, reminders/timers, morning briefing, prayer-time notifications, statuses, Today tab. **Phase 7b** (`docs/abdo_phase7b_spec.md`, four parts): 7b.1 money + travel mode (deployed
-  2026-10-12), **7b.2 timetables + exams (current: built, awaiting deploy)**, 7b.3 groceries+ +
-  polls, 7b.4 buses. **Phase 8** → always-on room
+  scheduler, reminders/timers, morning briefing, prayer-time notifications, statuses, Today tab. **Phase 7b** (`docs/abdo_phase7b_spec.md`, four parts): 7b.1 money + travel mode and 7b.2
+  timetables + exams (deployed 2026-10-12), **7b.3 fridge + going shopping + polls, and the
+  deterministic Quest parser (current: built, awaiting deploy)**, 7b.4 buses (details from Zain). **Phase 8** → always-on room
   device (wake word, speaker ID; prove on a Mac before buying hardware). Specs written when each starts.

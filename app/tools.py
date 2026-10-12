@@ -446,6 +446,88 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {"exam_id": {"type": "integer"}}, "required": ["exam_id"]},
     },
     {
+        "name": "add_to_fridge",
+        "description": (
+            "Note something in the fridge/cupboard, optionally with when it expires, e.g. 'we bought "
+            "milk, expires Friday', 'my yogurt goes off in 3 days'. Shared by default; mine=true if "
+            "it's the speaker's own. Pass the expiry day as said, never a computed date."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "item": {"type": "string"},
+                "expires_day": {"type": "string", "description": "Expiry day as said ('Friday', 'tomorrow'), optional."},
+                "expires_in_days": {"type": "integer", "description": "Or: expires in N days, optional."},
+                "mine": {"type": "boolean", "description": "True if it's the speaker's own, not shared."},
+            },
+            "required": ["item"],
+        },
+    },
+    {
+        "name": "list_fridge",
+        "description": "What's in the fridge (with ids and expiry, soonest first). Use for 'what's in the fridge', 'anything going off?'.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "fridge_item_done",
+        "description": (
+            "Mark a fridge item finished or thrown out, by its id from list_fridge. rebuy=true also "
+            "adds it to the shopping list."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"item_id": {"type": "integer"}, "rebuy": {"type": "boolean"}},
+            "required": ["item_id"],
+        },
+    },
+    {
+        "name": "going_shopping",
+        "description": (
+            "The speaker is heading out to shop: notify the other roommates so they can add to the "
+            "list, and return the current list. Use for 'I'm going to Walmart', 'heading to the store'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"store": {"type": "string", "description": "Where, if said (e.g. 'Walmart')."}},
+            "required": [],
+        },
+    },
+    {
+        "name": "create_poll",
+        "description": (
+            "Start a poll for the suite (single choice, 2-6 options), e.g. 'where are we eating: "
+            "shawarma, pizza, or sushi?'. Everyone else gets notified. Confirm the question and options once."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"question": {"type": "string"},
+                           "options": {"type": "array", "items": {"type": "string"}}},
+            "required": ["question", "options"],
+        },
+    },
+    {
+        "name": "vote",
+        "description": (
+            "Vote in a poll (or change a vote): the option as said or its number. Defaults to the newest "
+            "open poll; pass poll_id if there are several."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"option": {"type": "string"}, "poll_id": {"type": "integer"}},
+            "required": ["option"],
+        },
+    },
+    {
+        "name": "poll_results",
+        "description": "Open polls (and ones closed in the last few days) with votes, who voted what, and who hasn't voted.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "close_poll",
+        "description": "Close a poll (only whoever asked it). Defaults to their newest open poll.",
+        "input_schema": {"type": "object", "properties": {"poll_id": {"type": "integer"}}, "required": []},
+    },
+    {
         "name": "add_package",
         "description": (
             "Record an incoming package/delivery for someone in the suite, so everyone knows "
@@ -721,6 +803,106 @@ async def _schedule_tool(name: str, tool_input: dict, member_id: int | None) -> 
             return f"Removed exam #{tool_input['exam_id']} ({course})."
     except (ValueError, IndexError) as e:
         return f"ERROR: couldn't understand that day or time ({e}). Ask the user; do NOT guess."
+    return f"Unknown tool: {name}"
+
+
+async def _fridge_tool(name: str, tool_input: dict, member_id: int | None) -> str:
+    from app import pantry
+    today = datetime.now(ZoneInfo(settings.timezone)).date()
+
+    if name == "add_to_fridge":
+        item = (tool_input.get("item") or "").strip()
+        if not item:
+            return "ERROR: what's the item? Ask the user."
+        expires = None
+        if tool_input.get("expires_in_days") is not None:
+            try:
+                n = int(tool_input["expires_in_days"])
+            except (TypeError, ValueError):
+                return "ERROR: expires_in_days must be a number."
+            if not 0 <= n <= 365:
+                return "ERROR: that expiry is out of range. Ask the user."
+            expires = today + timedelta(days=n)
+        elif tool_input.get("expires_day"):
+            try:
+                expires = calendar_svc.resolve_date(tool_input["expires_day"])
+            except ValueError:
+                return f"ERROR: couldn't understand '{tool_input['expires_day']}'. Ask the user; do NOT guess."
+        owner = member_id if tool_input.get("mine") else None
+        iid = await db.add_pantry_item(item[:80], owner, expires, member_id)
+        e = pantry.expiry(expires, today)
+        return f"Added #{iid} {item} ({'yours' if owner else 'shared'})" + (f", expires {e['label']}." if e["label"] else ".")
+
+    if name == "list_fridge":
+        return pantry.describe(await db.open_pantry(), today)
+
+    if name == "fridge_item_done":
+        item = await db.use_pantry_item(tool_input["item_id"])
+        if item is None:
+            return (f"ERROR: no fridge item #{tool_input['item_id']}. Do NOT claim it changed; call "
+                    f"list_fridge for real ids.")
+        out = f"Marked {item} as finished."
+        if tool_input.get("rebuy"):
+            added = await db.add_shopping_item(item, None, member_id)
+            out += " Added it to the shopping list." if added else " It's already on the shopping list."
+        return out
+
+    if name == "going_shopping":
+        member = await db.get_member(member_id) if member_id else None
+        if member is None:
+            return "ERROR: couldn't tell who's going."
+        try:
+            n = await pantry.going_shopping(member, tool_input.get("store"))
+        except pantry.TooSoon:
+            return "Already told everyone in the last half hour; not pinging them again."
+        items = await db.get_shopping_list()
+        listing = ", ".join(i["item"] + (f" ({i['qty']})" if i["qty"] else "") for i in items) or "empty"
+        return f"Told {n} roommate(s). Current list: {listing}."
+    return f"Unknown tool: {name}"
+
+
+async def _poll_tool(name: str, tool_input: dict, member_id: int | None) -> str:
+    from app import polls
+    if member_id is None:
+        return "ERROR: couldn't tell who's asking."
+    member = await db.get_member(member_id)
+    try:
+        if name == "create_poll":
+            pid = await polls.create(tool_input.get("question"), tool_input.get("options") or [], member)
+            return f"Poll #{pid} started and everyone else was notified."
+
+        open_polls = [t for t in await polls.overview() if not t["closed"]]
+        if name == "poll_results":
+            recent = await polls.overview()
+            return "\n".join(polls.describe(t) for t in recent) if recent else "No polls right now."
+
+        def pick(want_mine: bool = False):
+            pid = tool_input.get("poll_id")
+            pool = [t for t in open_polls if not want_mine or t["created_by"] == member_id]
+            if pid is not None:
+                return next((t for t in pool if t["id"] == pid), None)
+            return pool[0] if pool else None
+
+        if name == "vote":
+            t = pick()
+            if t is None:
+                return "ERROR: there's no open poll to vote in."
+            idx = polls.match_option(t, tool_input.get("option"))
+            if idx is None:
+                return (f"ERROR: '{tool_input.get('option')}' isn't one of the options ("
+                        + ", ".join(o["text"] for o in t["options"]) + "). Ask which one.")
+            await db.cast_vote(t["id"], member_id, idx)
+            return f"Voted {t['options'][idx]['text']} in poll #{t['id']}."
+
+        if name == "close_poll":
+            t = pick(want_mine=True)
+            if t is None or not await db.close_poll(t["id"], member_id):
+                return "ERROR: no open poll of theirs to close (only whoever asked can close it)."
+            closed = next(x for x in await polls.overview() if x["id"] == t["id"])
+            win = polls.leaders(closed)
+            return f"Closed poll #{t['id']}. " + (f"Winner: {' / '.join(win)}." if win else "No votes.")
+    except polls.PollError as e:
+        return f"ERROR: {e}. Ask the user."
     return f"Unknown tool: {name}"
 
 
@@ -1027,6 +1209,12 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
 
     if name in ("who_is_free", "get_schedule", "add_exam", "list_exams", "delete_exam"):
         return await _schedule_tool(name, tool_input, member_id)
+
+    if name in ("add_to_fridge", "list_fridge", "fridge_item_done", "going_shopping"):
+        return await _fridge_tool(name, tool_input, member_id)
+
+    if name in ("create_poll", "vote", "poll_results", "close_poll"):
+        return await _poll_tool(name, tool_input, member_id)
 
     if name == "get_briefing":
         from app import briefing   # imported here: briefing imports this module

@@ -38,13 +38,6 @@ telegram.send_message = print_code
 
 class CannedAbdo:
     async def create(self, **kw):
-        if "format" in (kw.get("output_config") or {}):      # timetable extraction
-            import json
-            return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(
-                type="text", text=json.dumps({"classes": smoke.QUEST_ITEMS + [
-                    {"course": "CS 246", "section": "001", "kind": "LEC", "days": ["Tue", "Thu"],
-                     "start": "13:00", "end": "14:20", "room": "MC 4059",
-                     "start_date": "2026-09-09", "end_date": "2026-12-08"}]}))])
         last = kw["messages"][-1]["content"]
         said = last.split(": ", 1)[-1] if isinstance(last, str) else "…"
         reply = f"تمام يا باشا — you said “{said}”. (Demo mode: no real Abdo here.)"
@@ -112,6 +105,17 @@ smoke.fake.exams = [
      "created_by": 1, "deleted": False},
 ]
 smoke.fake._exam_seq = 2
+smoke.fake.pantry = [
+    {"id": 1, "item": "milk", "owner_id": None, "expires_on": today + timedelta(days=1), "added_by": 1, "used": False},
+    {"id": 2, "item": "Greek yogurt", "owner_id": 1, "expires_on": today, "added_by": 1, "used": False},
+    {"id": 3, "item": "leftover koshary", "owner_id": None, "expires_on": today - timedelta(days=1), "added_by": 2, "used": False},
+    {"id": 4, "item": "rice", "owner_id": None, "expires_on": None, "added_by": 3, "used": False},
+]
+smoke.fake._pan_seq = 4
+smoke.fake.polls = [{"id": 1, "question": "Where are we eating Friday?", "options": ["Shawarma", "Pizza", "Sushi"],
+                     "created_by": 2, "closed": False, "closed_at": None, "created_at": now}]
+smoke.fake.votes = [{"poll_id": 1, "member_id": 2, "option_index": 0}, {"poll_id": 1, "member_id": 3, "option_index": 1}]
+smoke.fake._poll_seq = 1
 smoke.fake.reminders = [
     {"id": 1, "member_id": 1, "text": "switch the laundry", "due_at": now + timedelta(minutes=35),
      "created_by": 1, "done": False},

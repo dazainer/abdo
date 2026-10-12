@@ -105,10 +105,12 @@ async def think(member, thread: str, user_text: str, *, channel: str = "telegram
     # Built once per turn and never changed between tool rounds: thinking blocks are
     # only valid while everything sent before them is unchanged.
     soon = await db.exams_between(now - timedelta(hours=3), now + timedelta(days=2))
+    from app import polls as _polls
+    open_polls = " ".join(_polls.describe(t) for t in await _polls.overview() if not t["closed"])
     system = build_system_prompt(member_name=name, roster=await db.roster_string(),
                                  channel=channel, voice=voice,
                                  statuses=statuses_line(await db.current_statuses(), tz),
-                                 exams=exams_line(soon, tz, now))
+                                 exams=exams_line(soon, tz, now), polls=open_polls)
 
     # Tool loop: Claude may call a tool; we run it and feed the result back.
     for _ in range(MAX_TOOL_ROUNDS):

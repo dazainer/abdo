@@ -426,6 +426,90 @@ async def delete_exam(exam_id: int, member_id: int):
     return row["course"] if row else None
 
 
+# --- fridge ----------------------------------------------------------------------
+
+async def add_pantry_item(item: str, owner_id, expires_on, added_by) -> int:
+    async with _pool.acquire() as con:
+        return await con.fetchval(
+            "INSERT INTO pantry_items (item, owner_id, expires_on, added_by) VALUES ($1, $2, $3, $4) "
+            "RETURNING id", item, owner_id, expires_on, added_by,
+        )
+
+
+async def open_pantry():
+    """What's still in the fridge, soonest expiry first (no expiry last), with owner names."""
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT p.id, p.item, p.owner_id, p.expires_on, p.added_by, m.name AS owner_name "
+            "FROM pantry_items p LEFT JOIN members m ON m.id = p.owner_id "
+            "WHERE NOT p.used ORDER BY p.expires_on NULLS LAST, p.created_at"
+        )
+
+
+async def use_pantry_item(item_id: int):
+    """Mark an item finished/thrown out. Returns its name, or None if not open."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "UPDATE pantry_items SET used = true, used_at = now() WHERE id = $1 AND NOT used RETURNING item",
+            item_id,
+        )
+    return row["item"] if row else None
+
+
+# --- polls -----------------------------------------------------------------------
+
+async def create_poll(question: str, options: list[str], created_by) -> int:
+    async with _pool.acquire() as con:
+        return await con.fetchval(
+            "INSERT INTO polls (question, options, created_by) VALUES ($1, $2::jsonb, $3) RETURNING id",
+            question, options, created_by,
+        )
+
+
+async def polls_recent(closed_within_days: int = 3):
+    """Open polls plus ones closed recently, newest first, with the creator's name."""
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT p.*, m.name AS created_by_name FROM polls p LEFT JOIN members m ON m.id = p.created_by "
+            "WHERE NOT p.closed OR p.closed_at > now() - make_interval(days => $1) "
+            "ORDER BY p.closed, p.created_at DESC",
+            closed_within_days,
+        )
+
+
+async def get_poll(poll_id: int):
+    async with _pool.acquire() as con:
+        return await con.fetchrow("SELECT * FROM polls WHERE id = $1", poll_id)
+
+
+async def poll_votes(poll_ids: list[int]):
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT v.poll_id, v.member_id, v.option_index, m.name FROM poll_votes v "
+            "JOIN members m ON m.id = v.member_id WHERE v.poll_id = ANY($1::bigint[]) ORDER BY v.voted_at",
+            poll_ids,
+        )
+
+
+async def cast_vote(poll_id: int, member_id: int, option_index: int) -> None:
+    async with _pool.acquire() as con:
+        await con.execute(
+            "INSERT INTO poll_votes (poll_id, member_id, option_index) VALUES ($1, $2, $3) "
+            "ON CONFLICT (poll_id, member_id) DO UPDATE SET option_index = $3, voted_at = now()",
+            poll_id, member_id, option_index,
+        )
+
+
+async def close_poll(poll_id: int, member_id: int) -> bool:
+    """Close an open poll, only by whoever asked it."""
+    async with _pool.acquire() as con:
+        row = await con.fetchrow(
+            "UPDATE polls SET closed = true, closed_at = now() WHERE id = $1 AND NOT closed "
+            "AND created_by = $2 RETURNING id", poll_id, member_id,
+        )
+    return row is not None
+
+
 # --- status ----------------------------------------------------------------------
 
 async def set_status(member_id: int, text: str, until_at, place: dict | None = None) -> None:

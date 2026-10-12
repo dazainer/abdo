@@ -48,7 +48,7 @@ function BriefingCard() {
     ...d.arriving.map((x) => `${x}: arriving today`),
   ];
   const quiet = !d.events.length && d.calendar_ok && !forYou.length && !d.groceries
-    && !d.classes.length && !d.my_exams.length && !d.others_exams.length
+    && !d.classes.length && !d.my_exams.length && !d.others_exams.length && !d.fridge.length && !d.polls.length
     && !d.money.transfers.some((t) => t.cents >= 100);
 
   return (
@@ -132,6 +132,25 @@ function BriefingCard() {
                 </span>
               ))}
               <Link to="/money" className="briefing-link">Settle up</Link>
+            </dd>
+          </div>
+        )}
+        {d.fridge.length > 0 && (
+          <div className="briefing-row">
+            <dt>Fridge</dt>
+            <dd>
+              {d.fridge.map((f, i) => (
+                <span key={i} className="briefing-line">{f.item}: {f.state === "expired" ? f.label : `use ${f.label}`}</span>
+              ))}
+            </dd>
+          </div>
+        )}
+        {d.polls.length > 0 && (
+          <div className="briefing-row">
+            <dt>Polls</dt>
+            <dd>
+              {d.polls.map((q) => <span key={q.id} className="briefing-line">{q.question}</span>)}
+              <Link to="/lists" className="briefing-link">Vote</Link>
             </dd>
           </div>
         )}

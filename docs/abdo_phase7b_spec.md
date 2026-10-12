@@ -6,8 +6,8 @@ smoke tests, and a live check before the next starts.
 | Part | Contents | Status |
 |---|---|---|
 | **7b.1** | Expenses + settle-up, travel mode | deployed 2026-10-12 |
-| **7b.2** | Class timetables (paste from Quest), exams | built 2026-10-12 (390 backend checks); awaiting deploy |
-| **7b.3** | Groceries+ (fridge + expiry, "going shopping"), polls | outlined below |
+| **7b.2** | Class timetables (paste from Quest), exams | deployed 2026-10-12; import moved to a deterministic parser (`app/quest.py`) on 2026-10-13 |
+| **7b.3** | Groceries+ (fridge + expiry, "going shopping"), polls | built 2026-10-13 (434 backend checks); awaiting deploy |
 | **7b.4** | Buses (ION + GRT) | outlined below; details from Zain later |
 
 ## Decisions (2026-10-12)
@@ -15,7 +15,7 @@ smoke tests, and a live check before the next starts.
 | Topic | Decision |
 |---|---|
 | Expense split | **Everyone by default**, people can be excluded or a split narrowed ("split with Mo"). Equal shares, exact to the cent. Fewest-transfers settle-up. Abdo confirms an expense once before recording it (money, like calendar writes). |
-| Timetables | **Paste from Quest** (any messy text) → one Claude extraction → the person confirms in the app → saved as weekly classes with term dates. |
+| Timetables | **Paste from Quest's list view** → parsed deterministically in code (`app/quest.py`; revised 2026-10-13 from a Claude extraction) → TST slots proposed as exams → the person confirms → saved. |
 | Exams | **Quizzes, midterms, finals only**, always visible to the suite (the point is informing the others). No assignments, no private flag. |
 | Buses | ION + GRT. Foundation now, stops/routes later. Known trips: Walmart on Bridgeport (groceries); ION from Laurier-Waterloo Park station. |
 | Travel mode | Kept simple: a status can carry a city; that person's prayers, Today, and briefing weather follow it until the status ends. No GPS. |

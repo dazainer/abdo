@@ -84,6 +84,15 @@ export interface ProposedClass {
   end_date: string;
 }
 
+export interface ProposedExam {
+  course: string;
+  date: string;
+  start: string;
+  end: string;
+  room: string;
+  kind: "quiz" | "midterm" | "final";
+}
+
 export interface SavedClass {
   course: string;
   section: string;
@@ -134,6 +143,8 @@ export interface Briefing {
   calendar_ok: boolean;
   money: { net: number; transfers: { direction: "pay" | "receive"; name: string; cents: number }[] };
   classes: { what: string; from: string; to: string }[];
+  fridge: { item: string; label: string; state: "soon" | "expired" }[];
+  polls: { id: number; question: string }[];
   my_exams: { course: string; kind: string; when: string; time: string; day: string }[];
   others_exams: { name: string; course: string; kind: string; when: string; time: string }[];
   waiting: string[];
@@ -157,6 +168,27 @@ export interface MoneyOverview {
     can_delete: boolean;
   }[];
   payments: { id: number; from_name: string; to_name: string; cents: number; settled_on: string; can_delete: boolean }[];
+}
+
+export interface FridgeItem {
+  id: number;
+  item: string;
+  owner: string | null;
+  mine: boolean;
+  expires_on: string | null;
+  label: string | null;
+  state: "expired" | "soon" | "ok" | null;
+}
+
+export interface Poll {
+  id: number;
+  question: string;
+  closed: boolean;
+  options: { text: string; count: number; voters: string[] }[];
+  waiting_on: string[];
+  created_by_name: string | null;
+  mine: boolean;
+  my_vote: number | null;
 }
 
 export interface Prefs {
@@ -233,6 +265,16 @@ export const api = {
   addItem: (item: string, qty?: string) => request<{ ok: true }>("POST", "/api/shopping", { item, qty }),
   boughtItem: (item: string) => request<{ ok: true }>("POST", "/api/shopping/bought", { item }),
 
+  goingShopping: (store?: string) => request<{ notified: number }>("POST", "/api/shopping/going", { store }),
+  fridge: () => request<{ items: FridgeItem[] }>("GET", "/api/fridge"),
+  addFridge: (f: { item: string; expires_on?: string; mine?: boolean }) => request<{ id: number }>("POST", "/api/fridge", f),
+  fridgeDone: (id: number, rebuy: boolean) =>
+    request<{ ok: true; added_to_list: boolean }>("POST", `/api/fridge/${id}/done`, { rebuy }),
+  polls: () => request<{ polls: Poll[] }>("GET", "/api/polls"),
+  createPoll: (question: string, options: string[]) => request<{ id: number }>("POST", "/api/polls", { question, options }),
+  vote: (id: number, option_index: number) => request<{ ok: true }>("POST", `/api/polls/${id}/vote`, { option_index }),
+  closePoll: (id: number) => request<{ ok: true }>("POST", `/api/polls/${id}/close`),
+
   packages: () => request<{ packages: Package[] }>("GET", "/api/packages"),
   addPackage: (p: { description: string; owner?: string; carrier?: string; day?: string }) =>
     request<{ id: number }>("POST", "/api/packages", p),
@@ -252,11 +294,12 @@ export const api = {
   updatePrefs: (p: Partial<Prefs>) => request<{ prefs: Prefs }>("PATCH", "/api/me/prefs", p),
 
   schedule: () => request<{ classes: SavedClass[] }>("GET", "/api/schedule"),
-  extractSchedule: (text: string) =>
-    request<{ classes: ProposedClass[]; term_start: string; term_end: string; skipped: string[] }>(
-      "POST", "/api/schedule/extract", { text }),
-  saveSchedule: (classes: ProposedClass[], term_start: string, term_end: string) =>
-    request<{ saved: number }>("PUT", "/api/schedule", { classes, term_start: term_start || null, term_end: term_end || null }),
+  parseSchedule: (text: string) =>
+    request<{ classes: ProposedClass[]; exams: ProposedExam[]; term_start: string; term_end: string; skipped: string[] }>(
+      "POST", "/api/schedule/parse", { text }),
+  saveSchedule: (classes: ProposedClass[], term_start: string, term_end: string, exams: ProposedExam[]) =>
+    request<{ saved: number; exams_added: number }>("PUT", "/api/schedule",
+      { classes, term_start: term_start || null, term_end: term_end || null, exams }),
   exams: () => request<{ exams: Exam[] }>("GET", "/api/exams"),
   addExam: (e: { course: string; kind: string; date: string; time: string; room?: string }) =>
     request<{ id: number }>("POST", "/api/exams", e),

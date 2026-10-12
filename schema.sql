@@ -220,3 +220,38 @@ CREATE TABLE exams (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_exams_upcoming ON exams (starts_at) WHERE NOT deleted;
+
+-- ---------- Fridge + polls (Phase 7b.3; live DBs get these via migrations/phase7b3_food_polls.sql) ----------
+
+-- What's in the fridge/cupboard, with an optional expiry. owner_id NULL = shared.
+CREATE TABLE pantry_items (
+    id          BIGSERIAL PRIMARY KEY,
+    item        TEXT NOT NULL,
+    owner_id    INTEGER REFERENCES members(id),
+    expires_on  DATE,
+    added_by    INTEGER REFERENCES members(id),
+    used        BOOLEAN NOT NULL DEFAULT false,      -- finished or thrown out
+    used_at     TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_pantry_open ON pantry_items (expires_on) WHERE NOT used;
+
+-- Single-choice polls ("where are we eating?"). options: JSON array of strings.
+CREATE TABLE polls (
+    id          BIGSERIAL PRIMARY KEY,
+    question    TEXT NOT NULL,
+    options     JSONB NOT NULL,
+    created_by  INTEGER REFERENCES members(id),
+    closed      BOOLEAN NOT NULL DEFAULT false,
+    closed_at   TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- One vote per member per poll; voting again changes it.
+CREATE TABLE poll_votes (
+    poll_id       BIGINT NOT NULL REFERENCES polls(id),
+    member_id     INTEGER NOT NULL REFERENCES members(id),
+    option_index  INTEGER NOT NULL,
+    voted_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (poll_id, member_id)
+);

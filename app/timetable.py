@@ -1,13 +1,12 @@
 """Class timetables and "who's free" — the code side of schedules.
 
-Import: a member pastes their schedule (Quest's list view, or any messy text). One Claude
-call with a strict JSON schema PROPOSES rows; validate() checks every field in code; the
-member reviews the preview and only then saves. Nothing is stored from the model directly.
+Import: a member pastes Quest's list view; app/quest.py parses it deterministically and
+PROPOSES classes (and test slots as exams); validate() re-checks every field; the member
+reviews the preview and only then saves.
 
 Free time is computed here, never by the model: busy intervals from classes (on their
 weekday, within the term), exams, and travel ("away"), subtracted from a window.
 """
-import json
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -24,81 +23,8 @@ EXAM_DEFAULT = timedelta(hours=2)        # an exam without an end time blocks 2 
 DAY_START, DAY_END = time(8, 0), time(23, 0)
 MIN_FREE = timedelta(minutes=30)
 
-_STR = {"type": "string"}
-EXTRACT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "classes": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "course": {"type": "string", "description": "Subject + number, e.g. 'MATH 136'."},
-                    "section": {"type": "string", "description": "Section number, e.g. '001', or ''."},
-                    "kind": {"type": "string", "description": "LEC, TUT, LAB, SEM, ... or ''."},
-                    "days": {"type": "array", "items": {"type": "string", "enum": DAYS}},
-                    "start": {"type": "string", "description": "Start time, 24-hour HH:MM."},
-                    "end": {"type": "string", "description": "End time, 24-hour HH:MM."},
-                    "room": {"type": "string", "description": "e.g. 'MC 2065', or ''."},
-                    "start_date": {"type": "string", "description": "First day, YYYY-MM-DD, or '' if not shown."},
-                    "end_date": {"type": "string", "description": "Last day, YYYY-MM-DD, or '' if not shown."},
-                },
-                "required": ["course", "section", "kind", "days", "start", "end", "room",
-                             "start_date", "end_date"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["classes"],
-    "additionalProperties": False,
-}
-
-EXTRACT_PROMPT = (
-    "Extract every weekly class meeting from this university schedule (usually copied from "
-    "the University of Waterloo's Quest, list view). One item per meeting pattern: a lecture "
-    "on MWF 10:30AM - 11:20AM is ONE item with days [Mon, Wed, Fri]. Quest day codes: M=Mon, "
-    "T=Tue, W=Wed, Th=Thu, F=Fri, S=Sat, Su=Sun ('TTh' = Tue + Thu). Convert times to 24-hour "
-    "HH:MM. Dates may be DD/MM/YYYY or MM/DD/YYYY depending on the student's settings: decide "
-    "from the whole schedule (a number over 12 must be the day; a term runs about four months, "
-    "e.g. September to December) and convert to YYYY-MM-DD. Skip rows marked TBA, online/"
-    "asynchronous rows without times, and dropped courses. Include TST rows and one-day rows "
-    "as they appear (they're filtered later). Don't invent anything: use '' for a field that "
-    "isn't in the text."
-)
-
-
 class TimetableError(ValueError):
     """Something we won't save. The message is safe to show."""
-
-
-async def extract(text: str) -> list[dict]:
-    """Proposed rows from pasted text (one cheap Claude call). Raises TimetableError."""
-    from app import brain   # the shared client
-    text = (text or "").strip()
-    if len(text) < 20:
-        raise TimetableError("paste your whole schedule (Quest → Class Schedule → List View)")
-    if len(text) > 20_000:
-        raise TimetableError("that's too long for a schedule; paste just the class list")
-    import anthropic
-    try:
-        resp = await brain.client.messages.create(
-            model=brain.MODEL,
-            max_tokens=8000,
-            system=EXTRACT_PROMPT,
-            messages=[{"role": "user", "content": text}],
-            output_config={"effort": "low", "format": {"type": "json_schema", "schema": EXTRACT_SCHEMA}},
-        )
-    except anthropic.APIError:
-        log.exception("timetable extraction call failed")
-        raise TimetableError("couldn't read schedules right now; try again in a minute")
-    if resp.stop_reason in ("refusal", "max_tokens"):
-        raise TimetableError("couldn't read that schedule; try pasting just the class list")
-    raw = next((b.text for b in resp.content if b.type == "text"), "")
-    try:
-        return json.loads(raw)["classes"]
-    except (ValueError, KeyError, TypeError):
-        log.warning("timetable extraction returned unparseable JSON")
-        raise TimetableError("couldn't read that schedule; try again")
 
 
 def is_one_off(item: dict) -> bool:

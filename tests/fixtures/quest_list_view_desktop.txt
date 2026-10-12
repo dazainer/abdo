@@ -1,0 +1,8 @@
+Winter 2027 | Undergraduate | University of Waterloo
+CS 135 - Designing Functional Programs
+Status	Units	Grading	Grade	Deadlines
+Enrolled	0.50	Numeric Grading Basis		Academic Calendar Deadlines
+Class Nbr	Section	Component	Days & Times	Room	Instructor	Start/End Date
+5101	001	LEC	MWF 8:30AM - 9:20AM	MC 2034	Drew Example	01/06/2027 - 04/05/2027
+5102	101	TUT	Th 2:30PM - 3:20PM	MC 4060	To be Announced	01/06/2027 - 04/05/2027
+5103	201	TST	W 7:00PM - 8:50PM	TBA	To be Announced	02/24/2027 - 02/24/2027

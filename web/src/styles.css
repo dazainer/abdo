@@ -542,6 +542,32 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .paste { min-height: 160px; resize: vertical; font-size: var(--t-small); line-height: 1.4; }
 .free-line { margin: 0; font-family: var(--font-sign); font-size: var(--t-lead); font-weight: 600; font-variant-numeric: tabular-nums; }
 
+/* ---- fridge + polls --------------------------------------------------------------- */
+
+.expiry { font-weight: 500; }
+.expiry-soon { color: var(--plate); }
+.expiry-expired { color: var(--danger); }
+
+.poll { padding: 10px 0 14px; border-bottom: 1px solid var(--line); }
+.poll-q { margin: 0; font-family: var(--font-sign); font-weight: 600; font-size: var(--t-lead); unicode-bidi: plaintext; text-align: left; }
+.poll-options { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
+.poll-option {
+  position: relative; overflow: hidden;
+  width: 100%; min-height: 44px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 0 14px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer; text-align: left;
+}
+.poll-option:disabled { cursor: default; }
+.poll-option.chosen { border-color: var(--plate); box-shadow: 0 0 0 1px var(--plate); }
+.poll-bar { position: absolute; inset: 0 auto 0 0; background: var(--snow); z-index: 0; }
+.poll-option.chosen .poll-bar { background: rgba(242, 183, 5, 0.35); }
+.poll-label, .poll-count { position: relative; z-index: 1; unicode-bidi: plaintext; }
+.poll-count { font-weight: 600; font-variant-numeric: tabular-nums; }
+.poll-voters { display: block; margin: 2px 4px 0; }
+
 /* ---- prayer times: a small enamel timetable, the next prayer lit in gold ---------- */
 
 .prayers {

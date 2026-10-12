@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from app import auth, briefing, calendar_svc, db, location, money, notify, prayer, push, stt, timetable, tts, turn
+from app import auth, briefing, calendar_svc, db, location, money, notify, pantry, polls, prayer, push, quest, stt, timetable, tts, turn
 from app.config import settings
 from app.tools import TimeError_, event_when, read_calendar, resolve_until
 
@@ -186,6 +186,104 @@ async def shopping_add(body: ShoppingIn, member=Depends(current_member)):
 async def shopping_bought(body: ItemRef, member=Depends(current_member)):
     if await db.mark_item_bought(body.item, member["id"]) is None:
         raise HTTPException(404, f"'{body.item}' isn't on the list")
+    return {"ok": True}
+
+
+class GoingIn(BaseModel):
+    store: str | None = Field(default=None, max_length=60)
+
+
+@router.post("/shopping/going", dependencies=[Depends(same_origin)])
+async def shopping_going(body: GoingIn, member=Depends(current_member)):
+    try:
+        return {"notified": await pantry.going_shopping(member, body.store)}
+    except pantry.TooSoon:
+        raise HTTPException(429, "you already told everyone in the last half hour")
+
+
+# --- fridge ----------------------------------------------------------------------
+
+class FridgeIn(BaseModel):
+    item: str = Field(min_length=1, max_length=80)
+    expires_on: str | None = None               # YYYY-MM-DD from a date input
+    mine: bool = False
+
+
+class FridgeDone(BaseModel):
+    rebuy: bool = False
+
+
+@router.get("/fridge")
+async def fridge(member=Depends(current_member)):
+    today = datetime.now(ZoneInfo(settings.timezone)).date()
+    return {"items": [{"id": r["id"], "item": r["item"], "owner": r["owner_name"],
+                       "mine": r["owner_id"] == member["id"],
+                       "expires_on": r["expires_on"].isoformat() if r["expires_on"] else None,
+                       **pantry.expiry(r["expires_on"], today)} for r in await db.open_pantry()]}
+
+
+@router.post("/fridge", dependencies=[Depends(same_origin)])
+async def fridge_add(body: FridgeIn, member=Depends(current_member)):
+    expires = None
+    if body.expires_on:
+        try:
+            expires = date.fromisoformat(body.expires_on)
+        except ValueError:
+            raise HTTPException(400, "expiry must be YYYY-MM-DD")
+    iid = await db.add_pantry_item(body.item.strip(), member["id"] if body.mine else None, expires, member["id"])
+    return {"id": iid}
+
+
+@router.post("/fridge/{item_id}/done", dependencies=[Depends(same_origin)])
+async def fridge_done(item_id: int, body: FridgeDone, member=Depends(current_member)):
+    item = await db.use_pantry_item(item_id)
+    if item is None:
+        raise HTTPException(404, f"no fridge item #{item_id}")
+    rebought = await db.add_shopping_item(item, None, member["id"]) if body.rebuy else False
+    return {"ok": True, "added_to_list": rebought}
+
+
+# --- polls -----------------------------------------------------------------------
+
+class PollIn(BaseModel):
+    question: str = Field(min_length=1, max_length=140)
+    options: list[str] = Field(min_length=2, max_length=6)
+
+
+class VoteIn(BaseModel):
+    option_index: int = Field(ge=0, le=5)
+
+
+@router.get("/polls")
+async def poll_list(member=Depends(current_member)):
+    return {"polls": [{**{k: t[k] for k in ("id", "question", "closed", "options", "waiting_on", "created_by_name")},
+                       "mine": t["created_by"] == member["id"], "my_vote": t["voted"].get(member["id"])}
+                      for t in await polls.overview()]}
+
+
+@router.post("/polls", dependencies=[Depends(same_origin)])
+async def poll_create(body: PollIn, member=Depends(current_member)):
+    try:
+        return {"id": await polls.create(body.question, body.options, member)}
+    except polls.PollError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/polls/{poll_id}/vote", dependencies=[Depends(same_origin)])
+async def poll_vote(poll_id: int, body: VoteIn, member=Depends(current_member)):
+    poll = await db.get_poll(poll_id)
+    if poll is None or poll["closed"]:
+        raise HTTPException(404, "no open poll with that id")
+    if body.option_index >= len(polls._options(poll)):
+        raise HTTPException(400, "no such option")
+    await db.cast_vote(poll_id, member["id"], body.option_index)
+    return {"ok": True}
+
+
+@router.post("/polls/{poll_id}/close", dependencies=[Depends(same_origin)])
+async def poll_close(poll_id: int, member=Depends(current_member)):
+    if not await db.close_poll(poll_id, member["id"]):
+        raise HTTPException(404, "no open poll of yours with that id")
     return {"ok": True}
 
 
@@ -372,10 +470,20 @@ class ClassIn(BaseModel):
     end_date: str = Field(default="", max_length=10)
 
 
+class ProposedExamIn(BaseModel):
+    course: str = Field(min_length=1, max_length=40)
+    kind: str
+    date: str
+    start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    room: str | None = Field(default=None, max_length=40)
+
+
 class ScheduleIn(BaseModel):
     classes: list[ClassIn] = Field(max_length=60)
     term_start: str | None = None
     term_end: str | None = None
+    exams: list[ProposedExamIn] = Field(default_factory=list, max_length=20)   # test slots to add
 
 
 class ExamIn(BaseModel):
@@ -385,10 +493,6 @@ class ExamIn(BaseModel):
     time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     end_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     room: str | None = Field(default=None, max_length=40)
-
-
-_extract_log: dict[int, list[float]] = {}
-EXTRACTS_PER_HOUR = 10       # each is a (cheap) Claude call; this caps a runaway loop
 
 
 def _class_out(c) -> dict:
@@ -403,23 +507,14 @@ async def schedule(member=Depends(current_member)):
     return {"classes": [_class_out(c) for c in await db.classes_for(member["id"])]}
 
 
-@router.post("/schedule/extract", dependencies=[Depends(same_origin)])
-async def schedule_extract(body: ExtractIn, member=Depends(current_member)):
-    """Proposes rows from pasted text. Saves nothing: the member reviews, then PUTs."""
-    import time as _t
-    recent = [t for t in _extract_log.get(member["id"], []) if _t.monotonic() - t < 3600]
-    if len(recent) >= EXTRACTS_PER_HOUR:
-        raise HTTPException(429, "that's a lot of imports for one hour; try again later")
-    _extract_log[member["id"]] = recent + [_t.monotonic()]
+@router.post("/schedule/parse", dependencies=[Depends(same_origin)])
+async def schedule_parse(body: ExtractIn, member=Depends(current_member)):
+    """Reads pasted Quest list-view text (deterministic, no model). Saves nothing: the member
+    reviews the proposed classes and test slots, then PUTs."""
     try:
-        items = await timetable.extract(body.text)
-    except timetable.TimetableError as e:
+        return quest.parse(body.text)
+    except quest.QuestFormatError as e:
         raise HTTPException(400, str(e))
-    weekly, one_offs = timetable.split_one_offs(items)
-    start, end = timetable.term_guess(weekly)
-    return {"classes": weekly, "term_start": start, "term_end": end,
-            "skipped": [f"{i.get('course', '').upper()} {i.get('kind', '').upper()}".strip()
-                        + (f" on {i['start_date']}" if i.get("start_date") else "") for i in one_offs]}
 
 
 @router.put("/schedule", dependencies=[Depends(same_origin)])
@@ -432,8 +527,29 @@ async def schedule_save(body: ScheduleIn, member=Depends(current_member)):
     rows, problems = timetable.validate([c.model_dump() for c in body.classes], ts, te)
     if problems:
         raise HTTPException(400, "; ".join(problems))
+    tz = ZoneInfo(settings.timezone)
+    new_exams = []
+    for x in body.exams:
+        if x.kind not in timetable.KINDS:
+            raise HTTPException(400, "an exam is a quiz, midterm, or final")
+        try:
+            d = date.fromisoformat(x.date)
+        except ValueError:
+            raise HTTPException(400, "exam dates must be YYYY-MM-DD")
+        starts = datetime.combine(d, datetime.strptime(x.start, "%H:%M").time(), tz)
+        ends = datetime.combine(d, datetime.strptime(x.end, "%H:%M").time(), tz) if x.end else None
+        new_exams.append((x, starts, ends))
     await db.replace_classes(member["id"], rows)
-    return {"saved": len(rows)}
+    added = 0
+    for x, starts, ends in new_exams:
+        # Re-importing must not duplicate an exam already on the list.
+        same = await db.exams_between(starts, starts + timedelta(minutes=1), member["id"])
+        if any(e["course"] == x.course.upper() for e in same):
+            continue
+        await db.add_exam(member["id"], x.course.strip().upper(), x.kind, starts, ends,
+                          (x.room or "").strip() or None, member["id"])
+        added += 1
+    return {"saved": len(rows), "exams_added": added}
 
 
 @router.get("/exams")

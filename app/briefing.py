@@ -160,6 +160,17 @@ async def gather(member, now: datetime | None = None) -> dict:
     others_exams = [exam_out(e) for e in upcoming if e["member_id"] != member["id"]
                     and (e["starts_at"].astimezone(tz).date() - today).days <= 1]
 
+    from app import pantry, polls
+    fridge = []
+    for r in await db.open_pantry():
+        if r["owner_id"] not in (None, member["id"]):
+            continue                     # someone else's food isn't your briefing
+        e = pantry.expiry(r["expires_on"], today)
+        if e["state"] in ("soon", "expired"):
+            fridge.append({"item": r["item"], "label": e["label"], "state": e["state"]})
+    waiting_polls = [{"id": t["id"], "question": t["question"]} for t in await polls.overview()
+                     if not t["closed"] and member["id"] not in t["voted"]]
+
     mine = await db.get_open_packages(member["id"])
     others = [s for s in await db.current_statuses() if s["member_id"] != member["id"]]
     prayers = []
@@ -184,6 +195,8 @@ async def gather(member, now: datetime | None = None) -> dict:
         "waiting": [p["description"] for p in mine if p["status"] == "arrived"],
         "arriving": [p["description"] for p in mine if p["status"] == "expected" and p["expected_on"] == today],
         "groceries": len(await db.get_shopping_list()),
+        "fridge": fridge,
+        "polls": waiting_polls,
         "statuses": [{"name": s["name"], "text": s["text"],
                       "until": s["until_at"].astimezone(tz).strftime("%a %H:%M") if s["until_at"] else None}
                      for s in others],
@@ -217,6 +230,14 @@ def render_text(b: dict) -> tuple[str, str]:
         lines.append("Arriving today: " + ", ".join(b["arriving"]))
     if b["groceries"]:
         lines.append(f"Groceries: {b['groceries']} item{'s' if b['groceries'] != 1 else ''} on the list")
+    soon = [f"{f['item']} ({f['label']})" for f in b["fridge"] if f["state"] == "soon"]
+    gone = [f"{f['item']} ({f['label']})" for f in b["fridge"] if f["state"] == "expired"]
+    if soon:
+        lines.append("Use soon: " + ", ".join(soon))
+    if gone:
+        lines.append("Expired, toss or check: " + ", ".join(gone))
+    for q in b["polls"]:
+        lines.append(f"Waiting for your vote: {q['question']}")
     for t in b["money"]["transfers"]:
         if t["cents"] >= 100:   # under $1 isn't worth a line
             lines.append(f"You owe {t['name']} {money.fmt(t['cents'])}" if t["direction"] == "pay"

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, type ProposedClass, type SavedClass } from "../api";
+import { api, ApiError, type ProposedClass, type ProposedExam, type SavedClass } from "../api";
+import { relativeDay } from "../lib/dates";
 import { Sign } from "../components/Sign";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -72,18 +73,19 @@ function Importer({ hasExisting, onDone, toast }: {
   const [termStart, setTermStart] = useState("");
   const [termEnd, setTermEnd] = useState("");
   const [skipped, setSkipped] = useState<string[]>([]);
+  const [exams, setExams] = useState<(ProposedExam & { include: boolean })[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   async function read() {
     setBusy(true);
     setError(null);
     try {
-      const res = await api.extractSchedule(text);
+      const res = await api.parseSchedule(text);
       setProposed(res.classes);
       setTermStart(res.term_start);
       setTermEnd(res.term_end);
       setSkipped(res.skipped);
-      if (!res.classes.length) setError("Abdo couldn't find any classes in that. Check you copied the list view.");
+      setExams(res.exams.map((x) => ({ ...x, include: true })));
     } catch (err) {
       setError(errorText(err, "Couldn't read that schedule."));
     } finally {
@@ -96,10 +98,12 @@ function Importer({ hasExisting, onDone, toast }: {
     setBusy(true);
     setError(null);
     try {
-      const res = await api.saveSchedule(proposed, termStart, termEnd);
-      toast(`Saved ${res.saved} class meetings`);
+      const chosen = exams.filter((x) => x.include).map(({ include: _, ...x }) => x);
+      const res = await api.saveSchedule(proposed, termStart, termEnd, chosen);
+      toast(`Saved ${res.saved} class meetings` + (res.exams_added ? ` and ${res.exams_added} exam${res.exams_added === 1 ? "" : "s"}` : ""));
       await qc.invalidateQueries({ queryKey: ["schedule"] });
       await qc.invalidateQueries({ queryKey: ["today"] });
+      await qc.invalidateQueries({ queryKey: ["exams"] });
       onDone();
     } catch (err) {
       setError(errorText(err, "Couldn't save the schedule."));
@@ -115,7 +119,7 @@ function Importer({ hasExisting, onDone, toast }: {
         <ol className="steps">
           <li>In Quest, open <strong>Class Schedule</strong>, pick the term, and choose <strong>List View</strong>.</li>
           <li>Select everything on the page, copy it, and paste it below.</li>
-          <li>Abdo reads it, then you check it before anything is saved.</li>
+          <li>Abdo reads it, then you check it before anything is saved. Test slots (TST) become exams.</li>
         </ol>
         <textarea className="field paste" value={text} onChange={(e) => setText(e.target.value)}
                   placeholder="Paste your Quest schedule here" aria-label="Your schedule from Quest" rows={8} />
@@ -134,11 +138,7 @@ function Importer({ hasExisting, onDone, toast }: {
     <section className="section" aria-labelledby="review">
       <h2 className="section-title" id="review">Check before saving</h2>
       <p className="section-note">Remove anything wrong. Saving replaces your current classes.</p>
-      {skipped.length > 0 && (
-        <p className="notice">
-          Left out (one-time, not weekly): {skipped.join("; ")}. Add tests like these under Exams on Today.
-        </p>
-      )}
+      {skipped.length > 0 && <p className="notice">Left out: {skipped.join("; ")}.</p>}
       <div className="term-row">
         <label className="row-meta" htmlFor="ts">Term starts</label>
         <label className="row-meta" htmlFor="te">Term ends</label>
@@ -157,6 +157,31 @@ function Importer({ hasExisting, onDone, toast }: {
           </li>
         ))}
       </ul>
+      {exams.length > 0 && (
+        <>
+          <h3 className="section-title" style={{ marginTop: 16, fontSize: "var(--t-body)" }}>Tests found (added as exams)</h3>
+          <ul className="rows">
+            {exams.map((x, i) => (
+              <li className="row" key={`${x.course}-${x.date}`}>
+                <input type="checkbox" checked={x.include} aria-label={`Add ${x.course} on ${x.date}`}
+                       style={{ width: 22, height: 22 }}
+                       onChange={(e) => setExams(exams.map((y, j) => (j === i ? { ...y, include: e.target.checked } : y)))} />
+                <span className="row-main">
+                  <span className="row-title">{x.course}</span>
+                  <span className="row-meta">{relativeDay(x.date)}, {x.start}–{x.end}</span>
+                </span>
+                <select className="field" value={x.kind} aria-label={`Kind of test for ${x.course}`}
+                        style={{ width: 112, minHeight: 36, padding: "4px 8px" }}
+                        onChange={(e) => setExams(exams.map((y, j) => (j === i ? { ...y, kind: e.target.value as ProposedExam["kind"] } : y)))}>
+                  <option value="quiz">Quiz</option>
+                  <option value="midterm">Midterm</option>
+                  <option value="final">Final</option>
+                </select>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       <div className="inline-form">
         <button className="btn" disabled={busy || !proposed.length} onClick={() => void save()}>
           {busy ? "Saving…" : "Save schedule"}

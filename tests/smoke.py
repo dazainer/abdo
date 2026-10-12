@@ -57,6 +57,9 @@ class FakeDB:
         self.settlements = []
         self.classes = []
         self.exams = []
+        self.pantry = []
+        self.polls = []
+        self.votes = []
 
     # members
     async def get_member_by_telegram_id(self, tg_id):
@@ -183,6 +186,53 @@ class FakeDB:
                                     "until_at": until_at, "updated_at": datetime.now(timezone.utc),
                                     "place": p.get("label"), "place_lat": p.get("lat"),
                                     "place_lng": p.get("lng"), "place_tz": p.get("tz")}
+
+    # fridge
+    async def add_pantry_item(self, item, owner_id, expires_on, added_by):
+        self._pan_seq = getattr(self, "_pan_seq", 0) + 1
+        self.pantry.append({"id": self._pan_seq, "item": item, "owner_id": owner_id, "expires_on": expires_on,
+                            "added_by": added_by, "used": False})
+        return self._pan_seq
+
+    async def open_pantry(self):
+        rows = [{**r, "owner_name": NAMES.get(r["owner_id"])} for r in self.pantry if not r["used"]]
+        return sorted(rows, key=lambda r: (r["expires_on"] is None, r["expires_on"] or date.max))
+
+    async def use_pantry_item(self, item_id):
+        for r in self.pantry:
+            if r["id"] == item_id and not r["used"]:
+                r["used"] = True
+                return r["item"]
+        return None
+
+    # polls
+    async def create_poll(self, question, options, created_by):
+        self._poll_seq = getattr(self, "_poll_seq", 0) + 1
+        self.polls.append({"id": self._poll_seq, "question": question, "options": list(options),
+                           "created_by": created_by, "closed": False, "closed_at": None,
+                           "created_at": datetime.now(timezone.utc)})
+        return self._poll_seq
+
+    async def polls_recent(self, closed_within_days=3):
+        rows = [{**p, "created_by_name": NAMES.get(p["created_by"])} for p in self.polls]
+        return sorted(rows, key=lambda p: (p["closed"], -p["id"]))
+
+    async def get_poll(self, poll_id):
+        return next((p for p in self.polls if p["id"] == poll_id), None)
+
+    async def poll_votes(self, poll_ids):
+        return [{**v, "name": NAMES[v["member_id"]]} for v in self.votes if v["poll_id"] in poll_ids]
+
+    async def cast_vote(self, poll_id, member_id, option_index):
+        self.votes = [v for v in self.votes if not (v["poll_id"] == poll_id and v["member_id"] == member_id)]
+        self.votes.append({"poll_id": poll_id, "member_id": member_id, "option_index": option_index})
+
+    async def close_poll(self, poll_id, member_id):
+        for p in self.polls:
+            if p["id"] == poll_id and not p["closed"] and p["created_by"] == member_id:
+                p["closed"] = True
+                return True
+        return False
 
     # classes + exams
     async def replace_classes(self, member_id, rows):
@@ -375,6 +425,8 @@ for _name in ("get_member_by_telegram_id", "roster_string", "get_member_id_by_na
               "add_expense", "add_settlement", "money_ledger", "recent_expenses",
               "recent_settlements", "delete_expense", "delete_settlement",
               "replace_classes", "classes_for", "add_exam", "exams_between", "delete_exam",
+              "add_pantry_item", "open_pantry", "use_pantry_item", "create_poll", "polls_recent",
+              "get_poll", "poll_votes", "cast_vote", "close_poll",
               "log_message", "recent_messages", "add_fact", "nearest_fact", "update_fact",
               "search_facts", "upsert_location", "get_location", "get_all_locations",
               "add_shopping_item", "get_shopping_list", "mark_item_bought",
@@ -2179,41 +2231,43 @@ def test_timetable_validate():
           free == [("08:00", "10:00"), ("13:00", "23:00")])
 
 
-async def test_timetable_extract():
-    print("Scenario: Quest paste -> one structured-output call; nothing saved")
-    import json as _json
-    from app import timetable
-    brain.client = FakeClient([_resp("end_turn", [_text_block(_json.dumps({"classes": QUEST_ITEMS}))])])
-    items = await timetable.extract("MATH 136 - Linear Algebra 1\nClass Nbr Section Component Days & Times ...")
-    req = brain.client.messages.requests[0]
-    check("extraction returns the proposed items", items == QUEST_ITEMS)
-    check("uses a strict JSON schema at low effort",
-          req["output_config"]["format"]["type"] == "json_schema" and req["output_config"]["effort"] == "low"
-          and req["output_config"]["format"]["schema"]["additionalProperties"] is False)
-    check("same model as the brain", req["model"] == brain.MODEL)
-    try:
-        await timetable.extract("hi")
-        check("too-short paste rejected before any call", False)
-    except timetable.TimetableError:
-        check("too-short paste rejected before any call", True)
-    brain.client = FakeClient([_resp("refusal", [])])
-    try:
-        await timetable.extract("x" * 50)
-        check("refusal -> honest error", False)
-    except timetable.TimetableError:
-        check("refusal -> honest error", True)
-    import anthropic as _anthropic
+def test_quest_parser():
+    print("Scenario: deterministic Quest list-view parser (fixtures mirror real copies)")
+    from app import quest, timetable
+    fx = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
+    r = quest.parse(open(os.path.join(fx, "quest_list_view.txt")).read())
+    weekly = [(c["course"], c["kind"], ",".join(c["days"]), c["start"], c["end"], c["room"]) for c in r["classes"]]
+    check("weekly classes read exactly (fields on separate lines)", weekly == [
+        ("ENGL 109", "LEC", "Mon,Wed", "14:30", "16:20", "HH 1101"),
+        ("MATH 135", "LEC", "Tue,Thu", "13:00", "14:20", "MC 2017"),
+        ("MATH 135", "TUT", "Fri", "12:30", "13:20", "MC 4045"),
+        ("PHYS 121", "TUT", "Wed", "10:30", "11:20", "PHY 145"),
+        ("PHYS 121", "LEC", "Tue,Thu", "10:00", "11:20", "STC 0050"),
+        ("STAT 230", "TUT", "Fri", "15:30", "16:20", "AL 116"),
+        ("STAT 230", "LEC", "Mon,Wed,Fri", "11:30", "12:20", "DC 1350")])
+    check("DD/MM dates: term Sep 9 to Dec 8", (r["term_start"], r["term_end"]) == ("2026-09-09", "2026-12-08"))
+    exams = [(e["course"], e["date"], e["start"], e["end"]) for e in r["exams"]]
+    check("TST slots become proposed exams, incl. a continuation row's second date", exams == [
+        ("STAT 230", "2026-10-08", "16:30", "18:20"), ("MATH 135", "2026-10-29", "16:30", "18:20"),
+        ("PHYS 121", "2026-11-10", "16:30", "18:20"), ("STAT 230", "2026-11-19", "16:30", "18:20")])
+    check("no TST ever becomes a weekly class", all(c["kind"] != "TST" for c in r["classes"]))
+    check("online/TBA and dropped courses are skipped with reasons",
+          r["skipped"] == ["ECON 101 LEC: online, no weekly slot", "HIST 110 LEC: dropped"])
+    rows, problems = timetable.validate(r["classes"])
+    check("parser output passes validation as-is", not problems and len(rows) == 12)
 
-    class Down:
-        async def create(self, **kw):
-            raise _anthropic.APIConnectionError(request=__import__("httpx").Request("POST", "https://x"))
-
-    brain.client = SimpleNamespace(messages=Down())
-    try:
-        await timetable.extract("x" * 50)
-        check("API failure -> honest error, not a 500", False)
-    except timetable.TimetableError:
-        check("API failure -> honest error, not a 500", True)
+    d = quest.parse(open(os.path.join(fx, "quest_list_view_desktop.txt")).read())
+    check("desktop tab-row copy, AM/PM times",
+          [(c["kind"], ",".join(c["days"]), c["start"], c["end"]) for c in d["classes"]]
+          == [("LEC", "Mon,Wed,Fri", "08:30", "09:20"), ("TUT", "Thu", "14:30", "15:20")])
+    check("MM/DD dates detected (a day over 12)", (d["term_start"], d["term_end"]) == ("2027-01-06", "2027-04-05")
+          and d["exams"][0]["date"] == "2027-02-24" and d["exams"][0]["start"] == "19:00")
+    for junk in ("", "hello there", "Weekly Calendar View\nMonday Tuesday"):
+        try:
+            quest.parse(junk)
+            check(f"non-Quest text rejected ({junk[:12]!r})", False)
+        except quest.QuestFormatError:
+            check(f"non-Quest text rejected ({junk[:12]!r})", True)
 
 
 async def test_who_is_free_and_exams():
@@ -2287,7 +2341,6 @@ def test_web_schedule():
     import json as _json
     from fastapi.testclient import TestClient
     from app import main as app_main
-    from app.channels import web as web_channel
     settings.session_pepper = "test-pepper"
     dms = []
 
@@ -2299,28 +2352,28 @@ def test_web_schedule():
     H = {"X-Abdo": "1"}
     fake.codes.clear()
     fake.classes, fake.exams = [], []
-    web_channel._extract_log.clear()
     try:
         c = TestClient(app_main.app, base_url="https://testserver")
         c.post("/api/auth/request-code", json={"name": "Zain"}, headers=H)
         c.post("/api/auth/verify", json={"name": "Zain", "code": re.search(r"\b(\d{6})\b", dms[-1]).group(1)}, headers=H)
 
-        tst = {"course": "CS 245", "section": "201", "kind": "TST", "days": ["Thu"], "start": "16:30",
-               "end": "18:20", "room": "", "start_date": "2026-10-29", "end_date": "2026-10-29"}
-        brain.client = FakeClient([_resp("end_turn", [_text_block(_json.dumps({"classes": QUEST_ITEMS + [tst]}))])])
-        r = c.post("/api/schedule/extract", json={"text": "MATH 136 ... pasted from Quest ..."}, headers=H)
+        fx = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "quest_list_view.txt")
+        r = c.post("/api/schedule/parse", json={"text": open(fx).read()}, headers=H)
         j = r.json()
-        check("one-off TST left out of the proposal and reported", j["skipped"] == ["CS 245 TST on 2026-10-29"]
-              and all(x["kind"] != "TST" for x in j["classes"]))
-        check("extract proposes rows + term guess, saves nothing",
-              r.status_code == 200 and len(j["classes"]) == 2 and j["term_start"] == "2026-09-09" and fake.classes == [])
-        r = c.put("/api/schedule", json={"classes": j["classes"]}, headers=H)
+        check("parse proposes classes + test slots, saves nothing",
+              r.status_code == 200 and len(j["classes"]) == 7 and len(j["exams"]) == 4 and fake.classes == [])
+        check("non-Quest text -> 400 with how-to", c.post("/api/schedule/parse", json={"text": "my classes are MWF"},
+                                                          headers=H).status_code == 400)
+        bad = [{**j["classes"][0], "start_date": "", "end_date": ""}]
+        r = c.put("/api/schedule", json={"classes": bad}, headers=H)
         check("save without term dates for every row -> 400 with the reason", r.status_code == 400 and "term dates" in r.text)
-        r = c.put("/api/schedule", json={"classes": j["classes"], "term_start": "2026-09-09",
-                                         "term_end": "2026-12-08"}, headers=H)
-        check("save after review", r.json() == {"saved": 4} and len(fake.classes) == 4)
+        r = c.put("/api/schedule", json={"classes": j["classes"], "exams": j["exams"][:2]}, headers=H)
+        check("save classes + the chosen test slots as exams",
+              r.json() == {"saved": 12, "exams_added": 2} and len(fake.exams) == 2 and fake.exams[0]["kind"] == "midterm")
+        r = c.put("/api/schedule", json={"classes": j["classes"], "exams": j["exams"]}, headers=H)
+        check("re-import doesn't duplicate exams", r.json()["exams_added"] == 2 and len(fake.exams) == 4)
         got = c.get("/api/schedule").json()["classes"]
-        check("schedule read back per meeting day", [x["day"] for x in got] == ["Mon", "Wed", "Fri", "Fri"])
+        check("schedule read back per meeting day", len(got) == 12 and got[0]["day"] == "Mon")
 
         r = c.post("/api/exams", json={"course": "math 136", "kind": "midterm", "date": "2026-10-20", "time": "19:00"}, headers=H)
         check("add exam", r.status_code == 200 and fake.exams[-1]["course"] == "MATH 136")
@@ -2331,14 +2384,155 @@ def test_web_schedule():
         t = c.get("/api/today").json()
         check("today includes free-together data", "together" in t["free"] and "no_timetable" in t["free"])
 
-        web_channel._extract_log[1] = [__import__("time").monotonic()] * web_channel.EXTRACTS_PER_HOUR
-        r = c.post("/api/schedule/extract", json={"text": "x" * 40}, headers=H)
-        check("extraction is rate-limited (cost guard)", r.status_code == 429)
     finally:
         telegram.send_message = real_send
         settings.session_pepper = None
         fake.classes, fake.exams = [], []
-        web_channel._extract_log.clear()
+    
+
+# =============================================================================
+# Phase 7b.3: fridge, going shopping, polls
+# =============================================================================
+
+async def test_fridge_shopping_polls():
+    print("Scenario: fridge + expiry, going shopping pings, polls (vote by name/number, close)")
+    from app import pantry, polls, notify, briefing
+    fake.pantry, fake.polls, fake.votes = [], [], []
+    today = datetime.now(TZ).date()
+    e = pantry.expiry
+    check("expiry labels", [e(today, today)["label"], e(today + timedelta(days=1), today)["label"],
+                            e(today + timedelta(days=5), today)["label"], e(today - timedelta(days=2), today)["label"]]
+          == ["today", "tomorrow", "in 5 days", "expired 2 days ago"])
+
+    out = await tools.run_tool("add_to_fridge", {"item": "milk", "expires_day": "tomorrow"}, member_id=1)
+    check("shared item with expiry resolved in code",
+          out.startswith("Added #") and fake.pantry[-1]["expires_on"] == today + timedelta(days=1) and fake.pantry[-1]["owner_id"] is None)
+    await tools.run_tool("add_to_fridge", {"item": "yogurt", "expires_in_days": 0, "mine": True}, member_id=2)
+    await tools.run_tool("add_to_fridge", {"item": "rice"}, member_id=1)
+    out = await tools.run_tool("add_to_fridge", {"item": "x", "expires_day": "someday"}, member_id=1)
+    check("bad expiry -> honest error", out.startswith("ERROR"))
+    out = await tools.run_tool("list_fridge", {}, member_id=1)
+    check("fridge listed soonest first, with owners", out.index("yogurt") < out.index("milk") < out.index("rice")
+          and "(Mo's)" in out and "(shared)" in out)
+    fake.shopping = []
+    out = await tools.run_tool("fridge_item_done", {"item_id": fake.pantry[0]["id"], "rebuy": True}, member_id=1)
+    check("finished + rebuy -> on the shopping list", "Added it to the shopping list" in out and fake.shopping[0]["item"] == "milk")
+    out = await tools.run_tool("fridge_item_done", {"item_id": 999}, member_id=1)
+    check("unknown fridge id -> honest error", out.startswith("ERROR"))
+
+    sent = []
+
+    async def deliver(member, title, body, url="/", silent=False):
+        sent.append((member["id"], title))
+        return "push"
+
+    real = notify.deliver
+    notify.deliver = deliver
+    pantry._last_going.clear()
+    try:
+        out = await tools.run_tool("going_shopping", {"store": "Walmart"}, member_id=1)
+        check("going shopping pings everyone else (not me)", sorted(m for m, _ in sent) == [2, 3]
+              and "Zain is going to Walmart" in sent[0][1] and "Current list: milk" in out)
+        sent.clear()
+        out = await tools.run_tool("going_shopping", {}, member_id=1)
+        check("no second ping within half an hour", sent == [] and "not pinging" in out)
+
+        sent.clear()
+        out = await tools.run_tool("create_poll", {"question": "Where are we eating?",
+                                                   "options": ["Shawarma", "Pizza", "Sushi", "pizza"]}, member_id=1)
+        check("poll created (duplicate option dropped), others notified",
+              out.startswith("Poll #") and fake.polls[-1]["options"] == ["Shawarma", "Pizza", "Sushi"]
+              and sorted(m for m, _ in sent) == [2, 3])
+        out = await tools.run_tool("create_poll", {"question": "x", "options": ["only one"]}, member_id=1)
+        check("a poll needs 2+ options", out.startswith("ERROR"))
+        await tools.run_tool("vote", {"option": "shawarma"}, member_id=1)
+        await tools.run_tool("vote", {"option": "2"}, member_id=2)
+        out = await tools.run_tool("vote", {"option": "sush"}, member_id=3)
+        check("vote by name, number, and partial match", out.startswith("Voted Sushi"))
+        out = await tools.run_tool("vote", {"option": "burgers"}, member_id=3)
+        check("not an option -> lists the real ones", out.startswith("ERROR") and "Shawarma" in out)
+        await tools.run_tool("vote", {"option": "Shawarma"}, member_id=3)
+        out = await tools.run_tool("poll_results", {}, member_id=2)
+        check("changed vote counted once; tally correct", "Shawarma 2 (Zain, Sam)" in out and "Pizza 1 (Mo)" in out
+              and "everyone voted" in out)
+        out = await tools.run_tool("close_poll", {}, member_id=2)
+        check("only the asker can close", out.startswith("ERROR"))
+        out = await tools.run_tool("close_poll", {}, member_id=1)
+        check("closing announces the winner", "Winner: Shawarma" in out)
+
+        await tools.run_tool("create_poll", {"question": "Movie night?", "options": ["Yes", "No"]}, member_id=2)
+        brain.client = FakeClient(reply_only("ok"))
+        await brain.think(ZAIN, "dm:1", "anything I need to do?")
+        ctx = brain.client.messages.requests[0]["system"][1]["text"]
+        check("open polls reach Abdo's context", "Open polls: Poll #" in ctx and "Movie night?" in ctx and "waiting on" in ctx)
+
+        real_fetch = briefing._fetch_weather
+
+        async def no_weather(lat, lng, tz):
+            raise RuntimeError("offline")
+
+        briefing._fetch_weather, briefing._weather_cache = no_weather, {}
+        await fake.add_pantry_item("cheese", None, today + timedelta(days=1), 2)
+        try:
+            b = await briefing.gather(ZAIN)
+            text = briefing.render_text(b)[1]
+            check("briefing: shared item going off, never someone else's own food",
+                  "Use soon: cheese (tomorrow)" in text and "yogurt" not in text)
+            check("briefing: poll waiting for my vote", "Waiting for your vote: Movie night?" in text)
+        finally:
+            briefing._fetch_weather, briefing._weather_cache = real_fetch, {}
+    finally:
+        notify.deliver = real
+        pantry._last_going.clear()
+        fake.pantry, fake.polls, fake.votes, fake.shopping = [], [], [], []
+
+
+def test_web_fridge_polls():
+    print("Scenario: web fridge, going shopping, polls")
+    import re
+    from fastapi.testclient import TestClient
+    from app import main as app_main, notify, pantry
+    settings.session_pepper = "test-pepper"
+    dms = []
+
+    async def capture(chat_id, text, disable_notification=False):
+        dms.append(text)
+
+    async def deliver(member, title, body, url="/", silent=False):
+        return "push"
+
+    real_send, real_deliver = telegram.send_message, notify.deliver
+    telegram.send_message, notify.deliver = capture, deliver
+    H = {"X-Abdo": "1"}
+    fake.codes.clear()
+    pantry._last_going.clear()
+    try:
+        c = TestClient(app_main.app, base_url="https://testserver")
+        c.post("/api/auth/request-code", json={"name": "Zain"}, headers=H)
+        c.post("/api/auth/verify", json={"name": "Zain", "code": re.search(r"\b(\d{6})\b", dms[-1]).group(1)}, headers=H)
+        today = datetime.now(TZ).date()
+        r = c.post("/api/fridge", json={"item": "milk", "expires_on": today.isoformat()}, headers=H)
+        check("add fridge item", r.status_code == 200)
+        items = c.get("/api/fridge").json()["items"]
+        check("fridge item with expiry state", items[0]["label"] == "today" and items[0]["state"] == "soon")
+        r = c.post(f"/api/fridge/{items[0]['id']}/done", json={"rebuy": True}, headers=H)
+        check("done + rebuy", r.json()["added_to_list"] is True)
+        check("going shopping notifies others", c.post("/api/shopping/going", json={"store": "Walmart"}, headers=H).json() == {"notified": 2})
+        check("going shopping cooldown -> 429", c.post("/api/shopping/going", json={}, headers=H).status_code == 429)
+        r = c.post("/api/polls", json={"question": "Dinner?", "options": ["Shawarma", "Pizza"]}, headers=H)
+        pid = r.json()["id"]
+        check("create poll", r.status_code == 200)
+        check("vote", c.post(f"/api/polls/{pid}/vote", json={"option_index": 1}, headers=H).status_code == 200)
+        p = c.get("/api/polls").json()["polls"][0]
+        check("poll shows my vote + who's left", p["my_vote"] == 1 and p["mine"] and "Mo" in p["waiting_on"])
+        check("bad option -> 400", c.post(f"/api/polls/{pid}/vote", json={"option_index": 4}, headers=H).status_code == 400)
+        check("close my poll", c.post(f"/api/polls/{pid}/close", headers=H).status_code == 200)
+        check("can't vote in a closed poll", c.post(f"/api/polls/{pid}/vote", json={"option_index": 0}, headers=H).status_code == 404)
+    finally:
+        telegram.send_message, notify.deliver = real_send, real_deliver
+        settings.session_pepper = None
+        pantry._last_going.clear()
+        fake.pantry, fake.polls, fake.votes, fake.shopping = [], [], [], []
 
 
 def test_tts_model_routing():
@@ -2395,8 +2589,9 @@ async def main():
     await test_money_tools()
     await test_travel_mode()
     test_timetable_validate()
-    await test_timetable_extract()
+    test_quest_parser()
     await test_who_is_free_and_exams()
+    await test_fridge_shopping_polls()
     print(f"\n{passed} passed, {failed} failed")
 
 
@@ -2410,5 +2605,6 @@ if __name__ == "__main__":
     test_web_today()
     test_web_money()
     test_web_schedule()
+    test_web_fridge_polls()
     print(f"\nTOTAL: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

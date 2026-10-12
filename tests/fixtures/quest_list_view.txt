@@ -1,0 +1,150 @@
+GO!
+ 
+Go To
+Alex Example
+My Academics
+My Class Schedule
+Select Display Option
+List View
+Weekly Calendar View
+Fall 2026 | Undergraduate | University of Waterloo
+Group Box
+Show Enrolled Classes
+Show Dropped Classes
+Show Waitlisted Classes
+ECON 101 - Intro Microeconomics
+Status	Units	Grading	Grade	Deadlines
+Enrolled
+0.50
+Numeric Grading Basis
+Academic Calendar Deadlines
+Class Nbr	Section	Component	Days & Times	Room	Instructor	Start/End Date
+4101
+081
+LEC
+TBA
+ONLN - Online
+Pat Example
+09/09/2026 - 08/12/2026
+ENGL 109 - Intro to Academic Writing
+Status	Units	Grading	Grade	Deadlines
+Enrolled
+0.50
+Numeric Grading Basis
+Academic Calendar Deadlines
+Class Nbr	Section	Component	Days & Times	Room	Instructor	Start/End Date
+3301
+002
+LEC
+MW 14:30 - 16:20
+HH 1101
+Sam Instructor
+09/09/2026 - 08/12/2026
+MATH 135 - Algebra
+Status	Units	Grading	Grade	Deadlines
+Enrolled
+0.50
+Numeric Grading Basis
+Academic Calendar Deadlines
+Class Nbr	Section	Component	Days & Times	Room	Instructor	Start/End Date
+6001
+003
+LEC
+TTh 13:00 - 14:20
+MC 2017
+Robin Lecturer
+09/09/2026 - 08/12/2026
+6002
+104
+TUT
+F 12:30 - 13:20
+MC 4045
+To be Announced
+09/09/2026 - 08/12/2026
+6003
+201
+TST
+Th 16:30 - 18:20
+TBA
+Jordan Coordinator
+29/10/2026 - 29/10/2026
+PHYS 121 - Mechanics
+Status	Units	Grading	Grade	Deadlines
+Enrolled
+0.50
+Numeric Grading Basis
+Academic Calendar Deadlines
+Class Nbr	Section	Component	Days & Times	Room	Instructor	Start/End Date
+7001
+201
+TST
+T 16:30 - 18:20
+TBA
+Casey Prof
+10/11/2026 - 10/11/2026
+7002
+103
+TUT
+W 10:30 - 11:20
+PHY 145
+To be Announced
+09/09/2026 - 08/12/2026
+7003
+001
+LEC
+TTh 10:00 - 11:20
+STC 0050
+Morgan Physicist
+09/09/2026 - 08/12/2026
+STAT 230 - Probability
+Status	Units	Grading	Grade	Deadlines
+Enrolled
+0.50
+Numeric Grading Basis
+Academic Calendar Deadlines
+Class Nbr	Section	Component	Days & Times	Room	Instructor	Start/End Date
+8001
+104
+TUT
+F 15:30 - 16:20
+AL 116
+Riley TA
+09/09/2026 - 08/12/2026
+8002
+003
+LEC
+MWF 11:30 - 12:20
+DC 1350
+Taylor Statistician
+09/09/2026 - 08/12/2026
+8003
+201
+TST
+Th 16:30 - 18:20
+TBA
+To be Announced
+08/10/2026 - 08/10/2026
+ 
+ 	
+ 
+Th 16:30 - 18:20
+TBA
+To be Announced
+19/11/2026 - 19/11/2026
+HIST 110 - Dropped Course
+Status	Units	Grading	Grade	Deadlines
+Dropped
+0.50
+Numeric Grading Basis
+Academic Calendar Deadlines
+Class Nbr	Section	Component	Days & Times	Room	Instructor	Start/End Date
+9001
+001
+LEC
+MW 09:30 - 10:20
+EV3 1408
+Lee Historian
+09/09/2026 - 08/12/2026
+ 
+Printer Friendly Page
+Go to top iconGo to top

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, type Package } from "../api";
+import { api, ApiError, type Package, type Poll } from "../api";
 import { Sign } from "../components/Sign";
 import { relativeDay } from "../lib/dates";
 
@@ -11,7 +11,9 @@ export function Lists({ toast }: { toast: (msg: string) => void }) {
     <div className="page">
       <header className="screen-head"><Sign ar="الحاجات" en="Lists" /></header>
       <main className="screen">
+        <Polls toast={toast} />
         <Groceries toast={toast} />
+        <Fridge toast={toast} />
         <Packages toast={toast} />
       </main>
     </div>
@@ -67,6 +69,7 @@ function Groceries({ toast }: { toast: (msg: string) => void }) {
       {list.data && items.length === 0 && (
         <p className="empty">Nothing to buy. Add something here, or tell Abdo.</p>
       )}
+      <GoingShopping toast={toast} />
       <ul className="rows">
         {items.map((i) => (
           <li className="row" key={i.id}>
@@ -78,6 +81,198 @@ function Groceries({ toast }: { toast: (msg: string) => void }) {
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+function GoingShopping({ toast }: { toast: (msg: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [store, setStore] = useState("");
+  async function go(e: FormEvent) {
+    e.preventDefault();
+    try {
+      const { notified } = await api.goingShopping(store.trim() || undefined);
+      toast(notified ? `Told ${notified} roommate${notified === 1 ? "" : "s"} you're going` : "Nobody else to tell");
+      setOpen(false);
+      setStore("");
+    } catch (err) {
+      toast(errorText(err, "Couldn't tell the others."));
+    }
+  }
+  if (!open) {
+    return <button className="btn btn-quiet" style={{ marginTop: 10 }} onClick={() => setOpen(true)}>I'm going shopping</button>;
+  }
+  return (
+    <form className="inline-form" onSubmit={go}>
+      <input className="field" value={store} onChange={(e) => setStore(e.target.value)} placeholder="Where? (optional)"
+             aria-label="Which store" autoFocus maxLength={60} />
+      <button className="btn">Tell everyone</button>
+    </form>
+  );
+}
+
+function Fridge({ toast }: { toast: (msg: string) => void }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["fridge"], queryFn: api.fridge, refetchInterval: 60_000 });
+  const [item, setItem] = useState("");
+  const [expires, setExpires] = useState("");
+  const [mine, setMine] = useState(false);
+
+  async function add(e: FormEvent) {
+    e.preventDefault();
+    if (!item.trim()) return;
+    try {
+      await api.addFridge({ item: item.trim(), expires_on: expires || undefined, mine });
+      setItem("");
+      setExpires("");
+      setMine(false);
+      await qc.invalidateQueries({ queryKey: ["fridge"] });
+    } catch (err) {
+      toast(errorText(err, "Couldn't add that."));
+    }
+  }
+
+  async function done(id: number, name: string, rebuy: boolean) {
+    try {
+      const r = await api.fridgeDone(id, rebuy);
+      toast(rebuy ? (r.added_to_list ? `${name} added to groceries` : `${name} was already on the list`) : `${name} finished`);
+      await qc.invalidateQueries({ queryKey: ["fridge"] });
+      await qc.invalidateQueries({ queryKey: ["shopping"] });
+    } catch (err) {
+      toast(errorText(err, "Couldn't update that."));
+    }
+  }
+
+  const items = q.data?.items ?? [];
+  return (
+    <section className="section" aria-labelledby="fridge">
+      <h2 className="section-title" id="fridge">Fridge</h2>
+      <form onSubmit={add} style={{ display: "grid", gap: 8, margin: "8px 0 4px" }}>
+        <div className="inline-form" style={{ margin: 0 }}>
+          <input className="field" dir="auto" value={item} onChange={(e) => setItem(e.target.value)}
+                 placeholder="Add food" aria-label="Food item" maxLength={80} />
+          <input className="field" type="date" value={expires} onChange={(e) => setExpires(e.target.value)}
+                 aria-label="Expires on (optional)" style={{ flex: "0 0 148px", minWidth: 0 }} />
+        </div>
+        <div className="inline-form" style={{ margin: 0, alignItems: "center" }}>
+          <label className="row-meta" style={{ display: "flex", gap: 6, alignItems: "center", flex: 1 }}>
+            <input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} /> Just mine
+          </label>
+          <button className="btn" disabled={!item.trim()}>Add</button>
+        </div>
+      </form>
+      {q.data && items.length === 0 && <p className="empty">Nothing tracked. Add food with an expiry to get a heads-up.</p>}
+      <ul className="rows">
+        {items.map((f) => (
+          <li className="row" key={f.id}>
+            <span className="row-main">
+              <span className="row-title">{f.item}</span>
+              <span className="row-meta">
+                {f.owner ? <span className="chip">{f.mine ? "Yours" : f.owner}</span> : <span className="chip">Shared</span>}{" "}
+                {f.label && <span className={`expiry expiry-${f.state}`}>{f.state === "expired" ? f.label : `expires ${f.label}`}</span>}
+              </span>
+            </span>
+            <button className="btn btn-quiet btn-small" onClick={() => void done(f.id, f.item, false)}>Finished</button>
+            <button className="btn btn-quiet btn-small" onClick={() => void done(f.id, f.item, true)}
+                    aria-label={`Finished, add ${f.item} to groceries`}>Rebuy</button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function Polls({ toast }: { toast: (msg: string) => void }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["polls"], queryFn: api.polls, refetchInterval: 15_000 });
+  const [creating, setCreating] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [options, setOptions] = useState(["", ""]);
+
+  async function create(e: FormEvent) {
+    e.preventDefault();
+    try {
+      await api.createPoll(question.trim(), options.map((o) => o.trim()).filter(Boolean));
+      toast("Poll sent to everyone");
+      setCreating(false);
+      setQuestion("");
+      setOptions(["", ""]);
+      await qc.invalidateQueries({ queryKey: ["polls"] });
+    } catch (err) {
+      toast(errorText(err, "Couldn't start the poll."));
+    }
+  }
+
+  async function vote(p: Poll, i: number) {
+    try {
+      await api.vote(p.id, i);
+      await qc.invalidateQueries({ queryKey: ["polls"] });
+    } catch (err) {
+      toast(errorText(err, "Couldn't vote."));
+    }
+  }
+
+  async function close(p: Poll) {
+    try {
+      await api.closePoll(p.id);
+      await qc.invalidateQueries({ queryKey: ["polls"] });
+    } catch (err) {
+      toast(errorText(err, "Couldn't close it."));
+    }
+  }
+
+  const polls = q.data?.polls ?? [];
+  const filled = options.map((o) => o.trim()).filter(Boolean).length;
+  return (
+    <section className="section" aria-labelledby="polls">
+      <h2 className="section-title" id="polls">Polls</h2>
+      {polls.map((p) => {
+        const total = p.options.reduce((a, o) => a + o.count, 0);
+        return (
+          <div className="poll" key={p.id}>
+            <p className="poll-q">{p.question}</p>
+            <p className="row-meta">
+              {p.created_by_name ? `Asked by ${p.mine ? "you" : p.created_by_name}. ` : ""}
+              {p.closed ? "Closed." : p.waiting_on.length ? `Waiting on ${p.waiting_on.join(", ")}.` : "Everyone voted."}
+            </p>
+            <ul className="poll-options">
+              {p.options.map((o, i) => (
+                <li key={i}>
+                  <button className={`poll-option${p.my_vote === i ? " chosen" : ""}`} disabled={p.closed}
+                          aria-pressed={p.my_vote === i} onClick={() => void vote(p, i)}>
+                    <span className="poll-bar" style={{ width: total ? `${(o.count / total) * 100}%` : 0 }} />
+                    <span className="poll-label">{o.text}</span>
+                    <span className="poll-count">{o.count}</span>
+                  </button>
+                  {o.voters.length > 0 && <span className="row-meta poll-voters">{o.voters.join(", ")}</span>}
+                </li>
+              ))}
+            </ul>
+            {p.mine && !p.closed && (
+              <button className="btn btn-quiet btn-small" onClick={() => void close(p)}>Close poll</button>
+            )}
+          </div>
+        );
+      })}
+      {creating ? (
+        <form onSubmit={create} style={{ display: "grid", gap: 8 }}>
+          <input className="field" dir="auto" value={question} onChange={(e) => setQuestion(e.target.value)}
+                 placeholder="Where are we eating?" aria-label="Question" maxLength={140} autoFocus />
+          {options.map((o, i) => (
+            <input key={i} className="field" dir="auto" value={o} placeholder={`Option ${i + 1}`} aria-label={`Option ${i + 1}`}
+                   maxLength={60} onChange={(e) => setOptions(options.map((x, j) => (j === i ? e.target.value : x)))} />
+          ))}
+          <div className="inline-form" style={{ margin: 0 }}>
+            {options.length < 6 && (
+              <button type="button" className="btn btn-quiet" onClick={() => setOptions([...options, ""])}>Add option</button>
+            )}
+            <button className="btn" disabled={!question.trim() || filled < 2}>Send poll</button>
+            <button type="button" className="btn btn-quiet" onClick={() => setCreating(false)}>Cancel</button>
+          </div>
+        </form>
+      ) : (
+        <button className="btn btn-quiet" style={{ marginTop: 6 }} onClick={() => setCreating(true)}>Start a poll</button>
+      )}
     </section>
   );
 }
