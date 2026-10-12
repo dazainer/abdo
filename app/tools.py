@@ -187,8 +187,9 @@ TOOLS = [
     {
         "name": "where_is",
         "description": (
-            "Find where a roommate currently is, from their shared live location. "
-            "Use for who's home, where is X, is X on the way. Pass 'everyone' for all."
+            "Find where a roommate is and what they're up to: their shared live location AND "
+            "their status if they set one. Use for who's home, where is X, what's X doing, is X "
+            "busy. Pass 'everyone' for all. Lead with the status when there is one."
         ),
         "input_schema": {
             "type": "object",
@@ -547,19 +548,36 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
         return "Deleted the event."
 
     if name == "where_is":
+        # "Where's X?" is usually answered better by X's status ("in a midterm till 3")
+        # than by a map pin, so the status rides along with the location, in code. The
+        # model once ignored a status sitting in its context and said "not sharing location".
         who = tool_input["name"]
+        tz = ZoneInfo(settings.timezone)
+        statuses = {s["name"].lower(): s for s in await db.current_statuses()}
+
+        def status_of(person: str) -> str:
+            s = statuses.get(person.lower())
+            if not s:
+                return ""
+            until = f" (until {s['until_at'].astimezone(tz).strftime('%a %H:%M')})" if s["until_at"] else ""
+            return f"{s['name']}'s status: {s['text']}{until}"
+
         if who.lower() in ("everyone", "all"):
             rows = await db.get_all_locations()
-            if not rows:
-                return "No one is sharing their location right now."
-            return "\n".join(
-                _describe_location(r["name"], r["lat"], r["lng"], r["updated_at"])
-                for r in rows
-            )
+            lines = [_describe_location(r["name"], r["lat"], r["lng"], r["updated_at"])
+                     + (f"; {status_of(r['name'])}" if status_of(r["name"]) else "") for r in rows]
+            sharing = {r["name"].lower() for r in rows}
+            lines += [status_of(s["name"]) + " (not sharing location)"
+                      for k, s in statuses.items() if k not in sharing]
+            return "\n".join(lines) if lines else "No one is sharing their location or a status right now."
         row = await db.get_location(who)
+        status = status_of(row["name"] if row else who)
         if not row:
-            return f"{who} isn't sharing a location right now."
-        return _describe_location(row["name"], row["lat"], row["lng"], row["updated_at"])
+            if status:
+                return f"{status}. (Not sharing a live location.)"
+            return f"{who} isn't sharing a location and hasn't set a status."
+        place = _describe_location(row["name"], row["lat"], row["lng"], row["updated_at"])
+        return f"{place}; {status}" if status else place
 
     if name == "add_to_shopping_list":
         added = await db.add_shopping_item(tool_input["item"], tool_input.get("qty"), member_id)

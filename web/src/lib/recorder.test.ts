@@ -82,6 +82,17 @@ describe("playMp3", () => {
     expect(FakeContext.instances[1].sources[0].start).toHaveBeenCalled();
   });
 
+  it("unlock with fresh: true always starts a new running context (after the mic closes)", async () => {
+    const { playMp3, unlockAudio } = await load();
+    unlockAudio();
+    FakeContext.instances[0].state = "running";
+    unlockAudio({ fresh: true });
+    expect(FakeContext.instances).toHaveLength(2);
+    expect(FakeContext.instances[0].state).toBe("closed");
+    expect(await playMp3(MP3)).toBe(true);
+    expect(FakeContext.instances[1].sources[0].start).toHaveBeenCalled();
+  });
+
   it("plays one voice at a time", async () => {
     const { playMp3, unlockAudio } = await load();
     unlockAudio();

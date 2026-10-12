@@ -117,13 +117,13 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
     }
   }
 
-  async function finishRecording() {
+  async function finishRecording(stopping?: Promise<Recording | null>) {
     await pressStarted.current;
     const r = recorder.current;
     recorder.current = null;
     setRecording(false);
     if (!r) return;
-    const rec = await r.stop();
+    const rec = await (stopping ?? r.stop());
     if (!rec || rec.seconds < 0.6) {
       toast("Hold the mic button while you talk, then let go.");
       return;
@@ -136,6 +136,21 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     pressStarted.current = startRecording();
+  }
+
+  function onMicUp() {
+    const r = recorder.current;
+    if (r?.isRecording()) {
+      // Order matters on iPhone: release the mic first, THEN unlock audio, both inside
+      // this tap, so the context that will play Abdo's reply is born after the record
+      // session ended (unlocking before the mic closed got it interrupted again).
+      const stopping = r.stop();
+      unlockAudio({ fresh: true });
+      void finishRecording(stopping);
+    } else {
+      unlockAudio();
+      void finishRecording(); // still starting (mic permission prompt): wait, then stop
+    }
   }
 
   function onMicKey(e: KeyboardEvent<HTMLButtonElement>) {
@@ -253,7 +268,7 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
             aria-pressed={recording}
             disabled={!!pending && !recording}
             onPointerDown={onMicDown}
-            onPointerUp={() => { unlockAudio(); void finishRecording(); }}
+            onPointerUp={onMicUp}
             onPointerCancel={() => { recorder.current?.cancel(); recorder.current = null; setRecording(false); }}
             onKeyDown={onMicKey}
             onContextMenu={(e) => e.preventDefault()}

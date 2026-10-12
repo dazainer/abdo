@@ -757,7 +757,23 @@ async def test_where_is():
     out = await tools.run_tool("where_is", {"name": "Zain"}, member_id=1)
     check("not-sharing handled", "isn't sharing" in out)
     out = await tools.run_tool("where_is", {"name": "everyone"}, member_id=1)
-    check("nobody-sharing handled", out == "No one is sharing their location right now.")
+    check("nobody-sharing handled", out == "No one is sharing their location or a status right now.")
+
+    # "Where's Zain?" must surface a status even with no location (it once didn't).
+    fake.statuses = {1: {"member_id": 1, "name": "Zain", "text": "Studying", "updated_at": now,
+                         "until_at": now + timedelta(hours=1)}}
+    out = await tools.run_tool("where_is", {"name": "zain"}, member_id=2)
+    check("status answers 'where is' without a location",
+          out.startswith("Zain's status: Studying (until") and "Not sharing a live location" in out)
+    fake.loc_rows = {"zain": {"name": "Zain", "lat": 43.0, "lng": -80.0, "updated_at": fresh}}
+    out = await tools.run_tool("where_is", {"name": "Zain"}, member_id=2)
+    check("location and status together", "Zain is home" in out and "Zain's status: Studying" in out)
+    fake.loc_rows = {}
+    out = await tools.run_tool("where_is", {"name": "everyone"}, member_id=2)
+    check("'everyone' includes statuses of non-sharers", "Zain's status: Studying" in out and "not sharing" in out)
+    out = await tools.run_tool("where_is", {"name": "Mo"}, member_id=1)
+    check("no location, no status -> says both", out == "Mo isn't sharing a location and hasn't set a status.")
+    fake.statuses = {}
 
 
 # =============================================================================

@@ -4,6 +4,10 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
+  define: {
+    // Shown in Settings, to check which version an installed app is actually running.
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString().slice(0, 16).replace("T", " ")),
+  },
   plugins: [
     react(),
     VitePWA({

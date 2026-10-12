@@ -25,5 +25,19 @@ createRoot(document.getElementById("root")!).render(
 );
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
-  void navigator.serviceWorker.register("/sw.js");
+  // When a deploy's new service worker takes over, reload once so this page runs the new
+  // code. An installed iPhone app otherwise keeps the old version in memory for days.
+  const hadController = !!navigator.serviceWorker.controller; // false on first install
+  let reloading = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || reloading) return;
+    reloading = true;
+    window.location.reload();
+  });
+  void navigator.serviceWorker.register("/sw.js").then((reg) => {
+    // Check for a new version whenever the app comes back to the foreground.
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") void reg.update();
+    });
+  });
 }

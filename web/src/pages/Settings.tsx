@@ -149,6 +149,7 @@ export function Settings({ me, onLoggedOut, toast }: {
 
         <section className="section">
           <button className="btn btn-quiet" onClick={() => void logout()}>Log out</button>
+          <p className="section-note" style={{ marginTop: 14 }}>App version {__BUILD_TIME__} UTC</p>
         </section>
       </main>
     </div>

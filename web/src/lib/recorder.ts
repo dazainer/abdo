@@ -47,7 +47,13 @@ export class Recorder {
     this.timer = window.setTimeout(onAutoStop, MAX_SECONDS * 1000);
   }
 
-  /** Stop and return the recording (always releases the mic). */
+  isRecording(): boolean {
+    return this.recorder?.state === "recording";
+  }
+
+  /** Stop and return the recording. The mic is released immediately (synchronously),
+   * not when encoding finishes: while it's open iOS keeps the audio session in record mode,
+   * which interrupts playback. Callers in a tap can unlock audio right after this. */
   stop(): Promise<Recording | null> {
     window.clearTimeout(this.timer);
     const recorder = this.recorder;
@@ -64,6 +70,7 @@ export class Recorder {
         resolve({ blob, filename: `voice.${extensionFor(type)}`, seconds });
       };
       recorder.stop();
+      this.stream?.getTracks().forEach((t) => t.stop());
     });
   }
 
@@ -115,10 +122,12 @@ export function prepareToRecord(): void {
   setSession("auto");
 }
 
-/** Call inside a tap or press, before anything that may play audio. */
-export function unlockAudio(): void {
+/** Call inside a tap or press, before anything that may play audio. `fresh` always
+ * starts a new context: use it right after the mic is released, when iOS has usually
+ * interrupted the old one. */
+export function unlockAudio(opts: { fresh?: boolean } = {}): void {
   const state = ctx?.state as string | undefined;
-  if (!ctx || state === "closed" || state === "interrupted") {
+  if (opts.fresh || !ctx || state === "closed" || state === "interrupted") {
     void ctx?.close().catch(() => undefined);
     ctx = new AudioContext();
   } else if (state === "suspended") {

@@ -146,6 +146,8 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   two instances, so never deliver without claiming first. Prayers send only within 20 min of
   their time; a briefing missed by noon is skipped (never send stale). Everything goes through
   `notify.deliver()`: push if it lands, else Telegram, never both. Fajr is silent.
+- **`where_is` returns location AND status** (computed in code): the model once ignored a
+  status in its context and answered "where's Zain?" with "not sharing location".
 - **Prayer times are computed locally** (`prayer.py`, adhanpy, ISNA + standard Asr via
   `PRAYER_METHOD` / `PRAYER_ASR`). Always pass the **local calendar date**: adhanpy reads the
   day from a UTC timestamp, so a Toronto evening would give tomorrow's times.
@@ -159,8 +161,16 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   AudioContext after the mic is used, and `resume()` outside a tap can stay pending until the
   NEXT tap. Never await it unbounded (that queued replies and played them all at once on the
   next mic press); `playMp3` gives up after 400 ms and the bubble keeps a Play button. Call
-  `unlockAudio()` in every tap that can lead to audio (mic down AND up, Play). One voice at a
-  time. `navigator.audioSession.type = "playback"` lets it play with the ringer on silent.
+  `unlockAudio()` in every tap that can lead to audio (mic down AND up, Play). On mic release
+  the ORDER matters: release the mic (`Recorder.stop()` stops the tracks synchronously), THEN
+  `unlockAudio({ fresh: true })`, both inside the tap. Unlocking first let the closing record
+  session interrupt the new context. One voice at a time. `navigator.audioSession.type =
+  "playback"` lets it play with the ringer on silent.
+- **Installed PWAs keep old code in memory**: `main.tsx` reloads once when a new service
+  worker takes over and checks for updates on every return to the foreground. Settings shows
+  "App version <build time>", the first thing to check when a phone bug "came back".
+- **Prayer times were verified** against the Aladhan API for the suite's location (within 1–2
+  min). A consistent offset against someone's Athan app means the app's location is wrong.
 - **Secrets are whitespace-stripped** (`str_strip_whitespace` in `config.py`), and a rejected
   webhook logs a warning. A Railway/`.env` secret mismatch shows up in Telegram's
   `getWebhookInfo` as `last_error_message: 403`. After rotating `TELEGRAM_WEBHOOK_SECRET`,
