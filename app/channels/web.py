@@ -377,7 +377,8 @@ async def buses(member=Depends(current_member)):
     return {"trips": [{"name": t["name"], "ok": t["ok"], "departures": [
         {"route": d["route"], "headsign": d["headsign"], "stop": d["stop_name"],
          "at": d["at"].isoformat(), "in_min": d["in_min"], "live": d["live"], "delay_min": d["delay_min"],
-         "arrive": d["arrive"].isoformat() if d["arrive"] else None, "arrive_stop": d["arrive_name"]}
+         "arrive": d["arrive"].isoformat() if d["arrive"] else None, "arrive_stop": d["arrive_name"],
+         "then_route": d["then_route"]}
         for d in t["departures"]]} for t in trips]}
 
 

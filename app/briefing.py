@@ -36,9 +36,10 @@ async def _fetch_weather(lat: float, lng: float, tz: str) -> dict:
     async with httpx.AsyncClient(timeout=8) as client:
         r = await client.get("https://api.open-meteo.com/v1/forecast", params={
             "latitude": lat, "longitude": lng,
-            "current": "temperature_2m,apparent_temperature,weather_code",
+            "current": "temperature_2m,apparent_temperature,weather_code,is_day",
             "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
-            "timezone": tz, "forecast_days": 1,
+            "hourly": "temperature_2m,weather_code,precipitation_probability,is_day",
+            "timezone": tz, "forecast_days": 2,       # 2 days so an evening look still gets 12 hours
         })
         r.raise_for_status()
         return r.json()
@@ -59,11 +60,36 @@ def _kind(code: int) -> str:
     return "rain"
 
 
+HOURS_AHEAD = 12
+
+
+def _hours(data: dict) -> list[dict]:
+    """The next HOURS_AHEAD hours after now: [{"hour": "15:00", "temp", "kind", "night", "rain"}]."""
+    h = data.get("hourly") or {}
+    times = h.get("time") or []
+    now = (data["current"].get("time") or "")[:13]          # "2026-10-13T14" (local, from Open-Meteo)
+    out = []
+    for i, ts in enumerate(times):
+        if ts[:13] <= now:
+            continue
+        try:
+            out.append({"hour": ts[11:16], "temp": round(h["temperature_2m"][i]),
+                        "kind": _kind(h["weather_code"][i]), "night": not h["is_day"][i],
+                        "rain": (h["precipitation_probability"][i] or 0)})
+        except (KeyError, IndexError, TypeError):
+            break
+        if len(out) == HOURS_AHEAD:
+            break
+    return out
+
+
 def parse_weather(data: dict) -> dict:
     """Open-Meteo response -> the numbers the briefing shows."""
     cur, day = data["current"], data["daily"]
     rain = day.get("precipitation_probability_max", [None])[0]
     return {
+        "night": cur.get("is_day") == 0,
+        "hours": _hours(data),
         "temp": round(cur["temperature_2m"]),
         "feels": round(cur["apparent_temperature"]),
         "sky": _WMO.get(cur["weather_code"], ""),

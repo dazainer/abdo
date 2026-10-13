@@ -1844,6 +1844,25 @@ async def test_scheduler():
             m.pop("prefs", None)
 
 
+def test_weather_hours():
+    print("Scenario: hourly forecast strip")
+    from app import briefing
+    hours = [f"2026-10-13T{h:02d}:00" for h in range(24)] + [f"2026-10-14T{h:02d}:00" for h in range(24)]
+    data = {"current": {"time": "2026-10-13T20:15", "temperature_2m": 9.6, "apparent_temperature": 7.0,
+                        "weather_code": 0, "is_day": 0},
+            "daily": {"temperature_2m_max": [14.0], "temperature_2m_min": [3.0], "precipitation_probability_max": [10]},
+            "hourly": {"time": hours, "temperature_2m": [float(i % 24) for i in range(48)],
+                       "weather_code": [61] * 48, "precipitation_probability": [40] * 48,
+                       "is_day": [1 if 7 <= i % 24 < 19 else 0 for i in range(48)]}}
+    w = briefing.parse_weather(data)
+    check("12 hours, starting the hour after now, past midnight",
+          [x["hour"] for x in w["hours"]][:5] == ["21:00", "22:00", "23:00", "00:00", "01:00"] and len(w["hours"]) == 12)
+    check("each hour has temp, sky, night, rain", w["hours"][0] == {"hour": "21:00", "temp": 21, "kind": "rain", "night": True, "rain": 40})
+    check("current night flag", w["night"] is True)
+    del data["hourly"]
+    check("no hourly data -> no strip, nothing invented", briefing.parse_weather(data)["hours"] == [])
+
+
 async def test_briefing_build():
     print("Scenario: briefing lines appear only when there's something real to say")
     from app import briefing
@@ -1881,7 +1900,8 @@ async def test_briefing_build():
 
         b = await briefing.gather(ZAIN, now)
         check("structured weather for the app card", b["weather"] == {
-            "temp": 3, "feels": -1, "sky": "light snow", "kind": "snow", "high": 5, "low": -2, "rain": 60})
+            "temp": 3, "feels": -1, "sky": "light snow", "kind": "snow", "high": 5, "low": -2, "rain": 60,
+            "night": False, "hours": []})
         check("structured events/packages/groceries",
               b["events"] == [{"summary": "Suite dinner", "time": "19:00"}] and b["waiting"] == ["desk lamp"]
               and b["groceries"] == 1 and b["calendar_ok"] is True)
@@ -2337,7 +2357,8 @@ async def test_who_is_free_and_exams():
     brain.client = FakeClient(reply_only("ok"))
     await brain.think(ZAIN, "dm:1", "anything tomorrow?")
     ctx = brain.client.messages.requests[0]["system"][1]["text"]
-    check("tomorrow's exam reaches Abdo's context", "Exams coming up: Mo: CS 246 midterm tomorrow 19:00" in ctx)
+    check("tomorrow's exam reaches Abdo's context",
+          re.search(r"Exams coming up: [^\n]*Mo: CS 246 midterm tomorrow 19:00", ctx) is not None)
 
     real_fetch = briefing._fetch_weather
 
@@ -2582,12 +2603,13 @@ BUS_TRIPS = [
 ]
 
 
-def _arrival(route, headsign, stop, at, stops, kind="SCHEDULED", delay=0):
+def _arrival(route, headsign, stop, at, stops, kind="SCHEDULED", delay=0, block=None):
     """One GRT arrivals row: departs `stop` at `at`; `stops` is the trip's [(id, "HH:MM")]."""
     day = "2026-10-14T"
     return {"stop": {"id": stop, "name": f"Stop {stop}"}, "route": {"shortName": route},
-            "trip": {"headsign": headsign, "stops": [{"stop": {"id": s, "name": f"Stop {s}"},
-                                                      "departure": f"{day}{hm}:00-04:00"} for s, hm in stops]},
+            "trip": {"headsign": headsign, "blockId": block,
+                     "stops": [{"stop": {"id": s, "name": f"Stop {s}"}, "departure": f"{day}{hm}:00-04:00"}
+                               for s, hm in stops]},
             "type": kind, "departure": f"{day}{at}:00-04:00", "departureDeltaFromScheduledSeconds": delay}
 
 
@@ -2602,6 +2624,16 @@ GRT_ROWS = {
         _arrival("7", "North", "101", "16:05", [("90", "16:00"), ("101", "16:05"), ("205", "16:12")]),
         _arrival("7", "North", "101", "16:35", [("101", "16:35"), ("205", "16:42")], kind="REALTIME", delay=180),
         _arrival("7", "North", "101", "16:50", [("101", "16:50"), ("205", "16:57")], kind="CANCELED"),
+    ],
+    # An interlined bus: the 12 ends at stop 500 and the same bus (block B1) leaves as the 8,
+    # which reaches stop 205. A different block's 8 from 500 doesn't count for that 12.
+    ("101", "102"): [
+        _arrival("12", "King", "102", "16:10", [("102", "16:10"), ("500", "16:14")], block="B1"),
+        _arrival("12", "King", "102", "16:40", [("102", "16:40"), ("500", "16:44")], block="B2"),
+    ],
+    ("500",): [
+        _arrival("8", "Fairway", "500", "16:16", [("500", "16:16"), ("205", "16:22")], block="B1"),
+        _arrival("8", "Fairway", "500", "16:46", [("500", "16:46"), ("205", "16:52")], block="B9"),
     ],
     ("206",): [_arrival("7", "South", "206", "16:20", [("205", "16:19"), ("206", "16:20"), ("100", "16:28")])],
     ("101", "300"): [
@@ -2640,6 +2672,12 @@ async def test_buses():
         check("ION headsign without the repeated route number", mall[0]["headsign"] == "North")
         check("direction settles itself (southbound trip isn't 'Groceries')",
               all(d["headsign"] == "North" for d in deps))
+
+        inter = {"id": 9, "name": "Via the 12", "from_stops": ["101", "102"], "to_stops": ["205"], "routes": ["12"]}
+        via = await transit.next_for(inter, now)
+        check("a bus that carries on as another route counts, with the arrival from the second leg",
+              [(d["route"], d["then_route"], d["arrive"].strftime("%H:%M")) for d in via] == [("12", "8", "16:22")])
+        check("the tool says to stay on", "stay on as it becomes the 8" in transit.describe(inter, via))
 
         check("find_trip: exact name", transit.find_trip(trips, "groceries")["id"] == 2)
         check("find_trip: words as said", transit.find_trip(trips, "groceries home")["id"] == 3)
@@ -2758,6 +2796,7 @@ async def main():
     test_prayer_times()
     await test_notify_deliver()
     await test_scheduler()
+    test_weather_hours()
     await test_briefing_build()
     test_money_math()
     await test_money_tools()
