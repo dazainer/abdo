@@ -620,3 +620,13 @@ button, input, textarea, select { font: inherit; color: inherit; }
   .mic.recording { animation: none; }
   .switch::after { transition: none; }
 }
+
+/* Buses: a closed section until tapped (nothing is fetched before that). */
+details > summary.section-title { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+details > summary.section-title::-webkit-details-marker { display: none; }
+details > summary.section-title::after {
+  content: ""; width: 8px; height: 8px; margin-top: -3px;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg);
+}
+details[open] > summary.section-title::after { transform: rotate(-135deg); margin-top: 3px; }
+.bus-in { font-family: var(--font-sign); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }

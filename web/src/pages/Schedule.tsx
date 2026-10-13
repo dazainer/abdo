@@ -21,7 +21,7 @@ export function Schedule({ toast }: { toast: (msg: string) => void }) {
     <div className="page">
       <header className="screen-head"><Sign ar="الجدول" en="Classes" /></header>
       <main className="screen">
-        <p style={{ marginTop: 8 }}><Link to="/today" className="btn-link">Back to Today</Link></p>
+        <p style={{ marginTop: 8 }}><Link to="/settings" className="btn-link">Back</Link></p>
         {importing || (q.data && classes.length === 0) ? (
           <Importer hasExisting={classes.length > 0} onDone={() => setImporting(false)} toast={toast} />
         ) : (
@@ -119,7 +119,7 @@ function Importer({ hasExisting, onDone, toast }: {
         <ol className="steps">
           <li>In Quest, open <strong>Class Schedule</strong>, pick the term, and choose <strong>List View</strong>.</li>
           <li>Select everything on the page, copy it, and paste it below.</li>
-          <li>Abdo reads it, then you check it before anything is saved. Test slots (TST) become exams.</li>
+          <li>Check what Abdo found, then save.</li>
         </ol>
         <textarea className="field paste" value={text} onChange={(e) => setText(e.target.value)}
                   placeholder="Paste your Quest schedule here" aria-label="Your schedule from Quest" rows={8} />
@@ -137,7 +137,7 @@ function Importer({ hasExisting, onDone, toast }: {
   return (
     <section className="section" aria-labelledby="review">
       <h2 className="section-title" id="review">Check before saving</h2>
-      <p className="section-note">Remove anything wrong. Saving replaces your current classes.</p>
+      <p className="section-note">Saving replaces your current classes.</p>
       {skipped.length > 0 && <p className="notice">Left out: {skipped.join("; ")}.</p>}
       <div className="term-row">
         <label className="row-meta" htmlFor="ts">Term starts</label>
@@ -159,7 +159,7 @@ function Importer({ hasExisting, onDone, toast }: {
       </ul>
       {exams.length > 0 && (
         <>
-          <h3 className="section-title" style={{ marginTop: 16, fontSize: "var(--t-body)" }}>Tests found (added as exams)</h3>
+          <h3 className="section-title" style={{ marginTop: 16, fontSize: "var(--t-body)" }}>Exams found</h3>
           <ul className="rows">
             {exams.map((x, i) => (
               <li className="row" key={`${x.course}-${x.date}`}>

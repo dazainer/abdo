@@ -180,6 +180,24 @@ export interface FridgeItem {
   state: "expired" | "soon" | "ok" | null;
 }
 
+export interface BusDeparture {
+  route: string;
+  headsign: string;
+  stop: string;
+  at: string;
+  in_min: number;
+  live: boolean;
+  delay_min: number;
+  arrive: string | null;
+  arrive_stop: string | null;
+}
+
+export interface BusTrip {
+  name: string;
+  ok: boolean;
+  departures: BusDeparture[];
+}
+
 export interface Poll {
   id: number;
   question: string;
@@ -288,6 +306,7 @@ export const api = {
 
   today: () => request<Today>("GET", "/api/today"),
   briefing: () => request<Briefing>("GET", "/api/briefing"),
+  buses: () => request<{ trips: BusTrip[] }>("GET", "/api/buses"),
   setStatus: (text: string, until_time?: string, place?: string) =>
     request<{ ok: true; place: string | null }>("PUT", "/api/status", { text, until_time, place }),
   clearStatus: () => request<{ ok: true }>("DELETE", "/api/status"),

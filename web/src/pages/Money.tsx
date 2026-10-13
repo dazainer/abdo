@@ -172,8 +172,8 @@ function AddExpense({ data, toast }: { data: MoneyOverview; toast: (msg: string)
         </fieldset>
         <p className="row-meta" aria-live="polite">
           {!among.length ? "Pick at least one person."
-            : cents ? (shares.length === 1 ? `${fmt(shares[0])} each` : `${fmt(Math.min(...shares))} to ${fmt(Math.max(...shares))} each (a cent of rounding)`)
-            : "Enter an amount to see the split."}
+            : cents ? (shares.length === 1 ? `${fmt(shares[0])} each` : `${fmt(Math.min(...shares))}–${fmt(Math.max(...shares))} each`)
+            : "\u00a0"}
         </p>
         <div className="inline-form" style={{ margin: 0 }}>
           <button className="btn" disabled={busy || !cents || !description.trim() || !among.length}>Add expense</button>
@@ -202,7 +202,7 @@ function Recent({ data, toast }: { data: MoneyOverview; toast: (msg: string) => 
     <section className="section" aria-labelledby="recent-exp">
       <h2 className="section-title" id="recent-exp">Recent</h2>
       {data.expenses.length === 0 && data.payments.length === 0 && (
-        <p className="empty">No expenses yet. Add one here, or tell Abdo: "I paid $42 for groceries."</p>
+        <p className="empty">No expenses yet.</p>
       )}
       <ul className="rows">
         {data.expenses.map((e) => (
@@ -210,8 +210,8 @@ function Recent({ data, toast }: { data: MoneyOverview; toast: (msg: string) => 
             <span className="row-main">
               <span className="row-title">{e.description}</span>
               <span className="row-meta">
-                {relativeDay(e.spent_on)}, paid by {e.paid_by === data.me ? "you" : e.paid_by_name},{" "}
-                {e.shares.length === data.members.length ? "split with everyone" : `split with ${e.shares.map((s) => (s.member_id === data.me ? "you" : s.name)).join(", ")}`}
+                {relativeDay(e.spent_on)}, {e.paid_by === data.me ? "you" : e.paid_by_name} paid
+                {e.shares.length < data.members.length && `, for ${e.shares.map((s) => (s.member_id === data.me ? "you" : s.name)).join(", ")}`}
               </span>
             </span>
             <span className="money-amount-cell">{fmt(e.amount_cents)}</span>
@@ -225,7 +225,7 @@ function Recent({ data, toast }: { data: MoneyOverview; toast: (msg: string) => 
           <li className="row" key={`p${p.id}`}>
             <span className="row-main">
               <span className="row-title">{p.from_name} paid {p.to_name}</span>
-              <span className="row-meta">{relativeDay(p.settled_on)}, payment</span>
+              <span className="row-meta">{relativeDay(p.settled_on)}</span>
             </span>
             <span className="money-amount-cell">{fmt(p.cents)}</span>
           </li>

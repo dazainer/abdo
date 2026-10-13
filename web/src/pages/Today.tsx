@@ -17,6 +17,7 @@ export function Today({ me, toast }: { me: Member; toast: (msg: string) => void 
         <Around me={me} toast={toast} />
         <Exams me={me} toast={toast} />
         <Prayers />
+        <Buses />
         <MyReminders toast={toast} />
         <Week />
       </main>
@@ -67,8 +68,8 @@ function BriefingCard() {
           <span className="briefing-sky">
             <span className="briefing-sky-main">{w.sky}</span>
             <span>
-              {w.feels !== w.temp ? `Feels like ${w.feels}°. ` : ""}High {w.high}°, low {w.low}°
-              {w.rain !== null ? `. ${w.rain}% chance of rain or snow` : ""}
+              {w.feels !== w.temp ? `Feels ${w.feels}°, ` : ""}{w.high}° / {w.low}°
+              {w.rain ? `, ${w.rain}% rain` : ""}
             </span>
           </span>
         </div>
@@ -158,8 +159,8 @@ function BriefingCard() {
           <div className="briefing-row">
             <dt>Groceries</dt>
             <dd>
-              {d.groceries} item{d.groceries === 1 ? "" : "s"} on the list.{" "}
-              <Link to="/lists" className="briefing-link">See the list</Link>
+              {d.groceries} on the list{" "}
+              <Link to="/lists" className="briefing-link">Open</Link>
             </dd>
           </div>
         )}
@@ -174,17 +175,12 @@ function FreeTogether() {
   const f = today.data?.free;
   if (!f) return null;
   const windows = f.together.map((w) => `${w.from}–${w.to}`).join(", ");
+  const skip = [...f.away.map((n) => `${n} (away)`), ...f.no_timetable.filter((n) => !f.away.includes(n)).map((n) => `${n} (no classes added)`)];
   return (
     <section className="section" aria-labelledby="free">
-      <h2 className="section-title" id="free">Free together today</h2>
-      <p className="free-line">{windows || "No common free time left today."}</p>
-      {(f.away.length > 0 || f.no_timetable.length > 0) && (
-        <p className="section-note">
-          {f.away.length > 0 && `Not counting ${f.away.join(", ")} (away). `}
-          {f.no_timetable.length > 0 && `No classes on file for ${f.no_timetable.join(", ")}. `}
-          <Link to="/schedule" className="btn-link">Your classes</Link>
-        </p>
-      )}
+      <h2 className="section-title" id="free">Free together</h2>
+      <p className="free-line">{windows || "Not today."}</p>
+      {skip.length > 0 && <p className="section-note">Without {skip.join(", ")}</p>}
     </section>
   );
 }
@@ -226,10 +222,8 @@ function Exams({ me, toast }: { me: Member; toast: (msg: string) => void }) {
   const exams = q.data?.exams ?? [];
   return (
     <section className="section" aria-labelledby="exams">
-      <h2 className="section-title" id="exams">Exams coming up</h2>
-      {q.data && exams.length === 0 && !adding && (
-        <p className="empty">No quizzes, midterms, or finals on the list. Add yours so everyone knows.</p>
-      )}
+      <h2 className="section-title" id="exams">Exams</h2>
+      {q.data && exams.length === 0 && !adding && <p className="empty">None coming up.</p>}
       <ul className="rows">
         {exams.map((x) => (
           <li className="row" key={x.id}>
@@ -244,7 +238,7 @@ function Exams({ me, toast }: { me: Member; toast: (msg: string) => void }) {
       {adding ? (
         <form onSubmit={add} style={{ display: "grid", gap: 8, marginTop: 10 }}>
           <div className="inline-form" style={{ margin: 0 }}>
-            <input className="field" value={course} onChange={(e) => setCourse(e.target.value)} placeholder="Course, e.g. MATH 136"
+            <input className="field" value={course} onChange={(e) => setCourse(e.target.value)} placeholder="Course"
                    aria-label="Course" autoFocus maxLength={40} />
             <select className="field field-narrow" value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Kind"
                     style={{ flex: "0 0 112px" }}>
@@ -290,7 +284,7 @@ function Around({ me, toast }: { me: Member; toast: (msg: string) => void }) {
     if (!text.trim()) return;
     try {
       const res = await api.setStatus(text.trim(), until || undefined, place.trim() || undefined);
-      if (res.place) toast(`Travel mode: ${res.place}. Your prayer times and weather follow you.`);
+      if (res.place) toast(`Travel mode: ${res.place}`);
       setEditing(false);
       setText("");
       setUntil("");
@@ -312,10 +306,10 @@ function Around({ me, toast }: { me: Member; toast: (msg: string) => void }) {
 
   return (
     <section className="section" aria-labelledby="around">
-      <h2 className="section-title" id="around">Around the suite</h2>
+      <h2 className="section-title" id="around">Around</h2>
       {today.isError && <p className="notice notice-error">Couldn't load today.</p>}
       {today.data && statuses.length === 0 && !editing && (
-        <p className="empty">No one's set a status. Let the others know if you're busy or away.</p>
+        <p className="empty">No statuses.</p>
       )}
       <ul className="rows">
         {statuses.map((s) => (
@@ -335,8 +329,8 @@ function Around({ me, toast }: { me: Member; toast: (msg: string) => void }) {
           <input className="field" dir="auto" value={text} onChange={(e) => setText(e.target.value)}
                  placeholder="In a midterm, away, studying…" aria-label="Your status" autoFocus maxLength={80} />
           <input className="field" dir="auto" value={place} onChange={(e) => setPlace(e.target.value)}
-                 placeholder="Away in another city? (optional)" aria-label="City, if you're away" maxLength={80} />
-          <label className="row-meta" htmlFor="until">Until (optional, today)</label>
+                 placeholder="City, if you're away" aria-label="City, if you're away" maxLength={80} />
+          <label className="row-meta" htmlFor="until">Until</label>
           <input id="until" className="field" type="time" value={until} onChange={(e) => setUntil(e.target.value)} />
           <div className="inline-form" style={{ margin: 0 }}>
             <button className="btn" disabled={!text.trim()}>Set status</button>
@@ -359,7 +353,7 @@ function Prayers() {
   return (
     <section className="section" aria-labelledby="prayers">
       <h2 className="section-title" id="prayers">Prayer times</h2>
-      {prayers?.place && <p className="section-note">In {prayers.place}, while you're away</p>}
+      {prayers?.place && <p className="section-note">In {prayers.place}</p>}
       {!prayers ? (
         <p className="empty">Prayer times need the suite's location set on the server.</p>
       ) : (
@@ -373,6 +367,41 @@ function Prayers() {
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+// Closed until tapped: nothing is fetched from GRT unless someone actually wants bus times.
+function Buses() {
+  const [open, setOpen] = useState(false);
+  const q = useQuery({ queryKey: ["buses"], queryFn: api.buses, enabled: open, refetchInterval: open ? 60_000 : false });
+  const trips = q.data?.trips ?? [];
+  if (q.data && trips.length === 0) return null;
+  return (
+    <section className="section" aria-labelledby="buses">
+      <details onToggle={(e) => setOpen(e.currentTarget.open)}>
+        <summary className="section-title" id="buses">Buses</summary>
+        {q.isPending && open && <p className="row-meta">Checking GRT…</p>}
+        {q.isError && <p className="notice notice-error">Couldn't reach GRT.</p>}
+        <ul className="rows">
+          {trips.map((t) => (
+            <li className="row" key={t.name}>
+              <span className="row-main">
+                <span className="row-title">{t.name}</span>
+                <span className="row-meta">
+                  {!t.ok ? "Couldn't reach GRT"
+                    : t.departures.length === 0 ? "Nothing soon"
+                    : t.departures.map((d) => `${d.route} ${clock(d.at)}${d.live ? (d.delay_min > 0 ? ` (+${d.delay_min})` : " (live)") : ""}`).join(", ")}
+                </span>
+              </span>
+              {t.departures[0] && <span className="bus-in">{t.departures[0].in_min} min</span>}
+            </li>
+          ))}
+        </ul>
+        {trips.some((t) => t.departures.length > 0 && !t.departures.some((d) => d.live)) && (
+          <p className="section-note">Scheduled times</p>
+        )}
+      </details>
     </section>
   );
 }
@@ -391,14 +420,11 @@ function MyReminders({ toast }: { toast: (msg: string) => void }) {
     }
   }
 
-  if (!today.data) return null;
+  if (!reminders.length) return null;
   return (
     <section className="section" aria-labelledby="reminders">
-      <h2 className="section-title" id="reminders">Your reminders</h2>
-      {reminders.length === 0 ? (
-        <p className="empty">None set. Ask Abdo: "remind me in 30 minutes to switch the laundry."</p>
-      ) : (
-        <ul className="rows">
+      <h2 className="section-title" id="reminders">Reminders</h2>
+      <ul className="rows">
           {reminders.map((r) => (
             <li className="row" key={r.id}>
               <span className="row-main">
@@ -410,8 +436,7 @@ function MyReminders({ toast }: { toast: (msg: string) => void }) {
               <button className="btn btn-quiet btn-small" onClick={() => void cancel(r.id)}>Cancel</button>
             </li>
           ))}
-        </ul>
-      )}
+      </ul>
     </section>
   );
 }
@@ -425,7 +450,6 @@ function Week() {
   return (
     <section className="section" aria-labelledby="week">
       <h2 className="section-title" id="week">This week</h2>
-      <p className="section-note">To add or change something, ask Abdo in the chat.</p>
       {cal.isError && (
         <div className="notice notice-error" role="alert">
           {cal.error instanceof ApiError && cal.error.status === 503

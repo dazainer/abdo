@@ -256,3 +256,13 @@ CREATE TABLE poll_votes (
     voted_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (poll_id, member_id)
 );
+
+-- Saved bus/ION trips (Phase 7b.4). to_stops empty = just the next departures from a stop.
+CREATE TABLE bus_trips (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    from_stops  TEXT[] NOT NULL,
+    to_stops    TEXT[] NOT NULL DEFAULT '{}',
+    routes      TEXT[] NOT NULL DEFAULT '{}',
+    position    INTEGER NOT NULL DEFAULT 0
+);

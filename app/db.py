@@ -749,3 +749,12 @@ async def update_package_status(package_id, status):
             package_id, status,
         )
     return row["description"] if row else None
+
+
+# --- Buses (Phase 7b.4) ---------------------------------------------------------
+async def bus_trips():
+    """The suite's saved trips, in display order."""
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT id, name, from_stops, to_stops, routes FROM bus_trips ORDER BY position, id"
+        )

@@ -124,6 +124,26 @@ smoke.fake.reminders = [
 ]
 smoke.fake._rem_seq = 2
 
+# Buses: made-up trips, with departures generated around the current time (no GRT calls).
+from app import transit  # noqa: E402
+smoke.fake.bus = smoke.BUS_TRIPS
+
+
+async def _demo_departures(stops):
+    base = transit.now().replace(second=0, microsecond=0)
+    rows = []
+    for k, stop in enumerate(stops):
+        for i in range(4):
+            at = base + timedelta(minutes=4 + 11 * k + 15 * i)
+            rows.append({"stop": {"id": stop, "name": f"Stop {stop}"}, "route": {"shortName": "7" if k == 0 else "301"},
+                         "trip": {"headsign": "Downtown", "stops": [
+                             {"stop": {"id": stop, "name": f"Stop {stop}"}, "departure": at.isoformat()},
+                             *({"stop": {"id": s, "name": f"Stop {s}"}, "departure": (at + timedelta(minutes=9)).isoformat()}
+                               for s in ("205", "100", "399"))]},
+                         "type": "SCHEDULED", "departure": at.isoformat(), "departureDeltaFromScheduledSeconds": 0})
+    return rows
+transit._post = _demo_departures
+
 if __name__ == "__main__":
     import uvicorn
     from app.main import app

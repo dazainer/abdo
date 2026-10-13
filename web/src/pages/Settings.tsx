@@ -9,8 +9,8 @@ const PUSH_NOTE: Record<PushState, string> = {
   unsupported: "This browser can't show notifications.",
   "needs-install": "On iPhone, notifications only work from the Home Screen app. Install Abdo first (below).",
   denied: "Notifications are blocked. Allow them for Abdo in your phone's settings, then come back.",
-  off: "Get a notification when Abdo has something for you.",
-  on: "You'll get notifications on this device.",
+  off: "Off on this device",
+  on: "On for this device",
 };
 
 export function Settings({ me, onLoggedOut, toast }: {
@@ -108,14 +108,11 @@ export function Settings({ me, onLoggedOut, toast }: {
         {p && (
           <section className="section" aria-labelledby="abdo-sends">
             <h2 className="section-title" id="abdo-sends">What Abdo sends you</h2>
-            <p className="section-note">
-              {push === "on" ? "As notifications on this device." : "As Telegram messages, until you turn on notifications."}
-            </p>
+            {push !== "on" && <p className="section-note">Sent on Telegram until notifications are on.</p>}
             <ul className="rows">
               <li className="row">
                 <span className="row-main">
                   <span className="row-title" id="brief">Morning briefing</span>
-                  <span className="row-meta">Weather, today's plans, packages, groceries, prayer times</span>
                 </span>
                 {p.briefing && (
                   <input className="field" type="time" value={p.briefing_time} aria-label="Briefing time"
@@ -128,7 +125,7 @@ export function Settings({ me, onLoggedOut, toast }: {
               <li className="row">
                 <span className="row-main">
                   <span className="row-title" id="pray">Prayer times</span>
-                  <span className="row-meta">All five; Fajr arrives silently</span>
+                  <span className="row-meta">Fajr is silent</span>
                 </span>
                 <button className="switch" role="switch" aria-checked={p.prayers} aria-labelledby="pray"
                         onClick={() => void savePrefs({ prayers: !p.prayers })} />
@@ -141,8 +138,7 @@ export function Settings({ me, onLoggedOut, toast }: {
           <ul className="rows">
             <li className="row">
               <span className="row-main">
-                <span className="row-title">Your class schedule</span>
-                <span className="row-meta">Abdo uses it for "when are we all free?" and your briefing</span>
+                <span className="row-title">Your classes</span>
               </span>
               <Link to="/schedule" className="btn btn-quiet btn-small" style={{ textDecoration: "none" }}>Open</Link>
             </li>

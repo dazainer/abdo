@@ -51,7 +51,7 @@ Claude.
 app/  → main.py (app setup, GET /api/health version, serves web/dist as an SPA, starts the
         scheduler), scheduler.py + notify.py + briefing.py + prayer.py (proactive Abdo),
         money.py (cents math) + location.py (travel mode) + timetable.py (classes, free time) +
-        quest.py (Quest parser) + pantry.py (fridge, shopping pings) + polls.py,
+        quest.py (Quest parser) + pantry.py (fridge, shopping pings) + polls.py + transit.py (buses),
         channels/telegram.py (webhook adapter), channels/web.py (/api for the web app),
         auth.py (Telegram-code login + sessions), push.py (web push), turn.py
         (handle_turn), brain.py (tool loop), prompts.py (static persona + dynamic context),
@@ -173,6 +173,11 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   2-6 options, one vote each (change it, or tap your choice again to take it back), closed or
   deleted only by the asker. Closed polls shrink to a results line and drop off after 24 h. Open
   polls ride in Abdo's context so "I want shawarma" becomes a vote.
+- **Buses** (`app/transit.py`) come from the GraphQL API behind GRT's departures site
+  (`GRT_API_URL`), not GTFS: GRT's GTFS host is down and its realtime is off for everyone. It's
+  undocumented, so keep it polite (per-trip query, 60 s cache, fetched only on demand) and never
+  invent a time when it fails. A trip matches only if the departure's own trip reaches a
+  `to_stop` after the boarding stop. Real stop ids stay in `local/bus_trips.sql`.
 - **History is short-term memory, not a to-do list**: `brain._history_messages` keeps the last
   10 turns from the last 3 hours, user turns stamped "[HH:MM] Name:". The persona says answer
   the newest message only. Without this, Abdo re-offered things the person had dropped and
@@ -245,5 +250,5 @@ The full plan, decisions log, and later-phase outlines are in `docs/ROADMAP.md`.
 - **Phase 7a (current: deployed 2026-10-12; briefing card added after the first live briefing)** → `docs/abdo_phase7a_proactive_spec.md`:
   scheduler, reminders/timers, morning briefing, prayer-time notifications, statuses, Today tab. **Phase 7b** (`docs/abdo_phase7b_spec.md`, four parts): 7b.1 money + travel mode and 7b.2
   timetables + exams (deployed 2026-10-12), **7b.3 fridge + going shopping + polls, and the
-  deterministic Quest parser (current: built, awaiting deploy)**, 7b.4 buses (details from Zain). **Phase 8** → always-on room
+  deterministic Quest parser** (deployed), **7b.4 buses + a declutter pass (current: built, awaiting deploy)**. **Phase 8** → always-on room
   device (wake word, speaker ID; prove on a Mac before buying hardware). Specs written when each starts.

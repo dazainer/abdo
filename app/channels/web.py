@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from app import auth, briefing, calendar_svc, db, location, money, notify, pantry, polls, prayer, push, quest, stt, timetable, tts, turn
+from app import auth, briefing, calendar_svc, db, location, money, notify, pantry, polls, prayer, push, quest, stt, timetable, transit, tts, turn
 from app.config import settings
 from app.tools import TimeError_, event_when, read_calendar, resolve_until
 
@@ -367,6 +367,18 @@ async def calendar(days: int = Query(default=7, ge=1, le=31), member=Depends(cur
         raise HTTPException(503, "couldn't reach the calendar, try again in a moment")
     return {"configured": True,
             "events": [{"id": e["id"], "summary": e["summary"], **event_when(e)} for e in events]}
+
+
+# --- buses (scheduled or live, straight from GRT; only fetched when someone looks) ----
+
+@router.get("/buses")
+async def buses(member=Depends(current_member)):
+    trips = await transit.overview(await db.bus_trips(), transit.now())
+    return {"trips": [{"name": t["name"], "ok": t["ok"], "departures": [
+        {"route": d["route"], "headsign": d["headsign"], "stop": d["stop_name"],
+         "at": d["at"].isoformat(), "in_min": d["in_min"], "live": d["live"], "delay_min": d["delay_min"],
+         "arrive": d["arrive"].isoformat() if d["arrive"] else None, "arrive_stop": d["arrive_name"]}
+        for d in t["departures"]]} for t in trips]}
 
 
 # --- today: statuses, prayer times, my reminders -----------------------------------

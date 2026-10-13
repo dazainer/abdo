@@ -8,7 +8,7 @@ smoke tests, and a live check before the next starts.
 | **7b.1** | Expenses + settle-up, travel mode | deployed 2026-10-12 |
 | **7b.2** | Class timetables (paste from Quest), exams | deployed 2026-10-12; import moved to a deterministic parser (`app/quest.py`) on 2026-10-13 |
 | **7b.3** | Groceries+ (fridge + expiry, "going shopping"), polls | built 2026-10-13 (434 backend checks); awaiting deploy |
-| **7b.4** | Buses (ION + GRT) | outlined below; details from Zain later |
+| **7b.4** | Buses (ION + GRT), plus a web-app declutter pass | built 2026-10-13; awaiting deploy |
 
 ## Decisions (2026-10-12)
 
@@ -146,9 +146,21 @@ ALTER TABLE member_status ADD COLUMN place_tz TEXT;            -- IANA, from the
 - **Polls:** `polls` / `poll_votes`. Created by Abdo or the app, pushed to everyone, voted in
   the app (Telegram: reply with an option name). Results come in Abdo's answers and on Lists.
 
-## 7b.4 — Buses (outline; Zain gives stops/routes later)
-- Foundation: a GTFS static loader (GRT publishes GTFS + GTFS-realtime). Verify current feed
-  URLs and terms first, plus a config of "favourite trips" (stop + route + direction).
-- Known trips to seed: ION from Laurier-Waterloo Park station (direction to confirm); GRT
-  toward the Walmart on Bridgeport.
-- Tool `next_departures(trip?)`, a Today "Leaving soon" row. Realtime if available, else scheduled.
+## 7b.4 — Buses (built 2026-10-13)
+- **Source: the GraphQL API behind GRT's own departures site** (`stoptimes.grt.ca`,
+  `GRT_API_URL`). Checked 2026-10-12: GRT's GTFS host (`webapps.regionofwaterloo.ca`) refuses
+  connections, the only reachable GTFS copy (Mobility Database mirror) is last term's, and GRT's
+  live tracking is down for everyone, so Google Maps and the Transit app show scheduled times
+  too. The departures API serves the current schedule (holiday service included) and marks a
+  departure live by itself once GRT's tracking returns. No GTFS download or storage.
+- It isn't a documented open-data API: one small query per trip, a 60 s cache, only fetched
+  when someone asks (the Today section is closed until tapped), and a failure is reported as
+  "couldn't reach GRT", never guessed. If it changes, swap `transit._post`; the rest stays.
+- **Trips** (`bus_trips`): board at any of `from_stops`, get off at any of `to_stops`,
+  optionally only some `routes`. A departure counts only if its own trip reaches a `to_stop`
+  after the boarding stop, which settles direction and gives the arrival time. No `to_stops` =
+  plain departures (the stop by home). Real stop ids live in the gitignored
+  `local/bus_trips.sql`, never in the repo.
+- Tool `next_bus(trip?, route?)`; `GET /api/buses`; a closed "Buses" section on Today.
+- Not built (Zain: low priority): "leave by" alerts. `set_reminder` already covers "remind me
+  ten minutes before the 4:41".

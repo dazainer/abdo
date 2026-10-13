@@ -67,7 +67,7 @@ function Groceries({ toast }: { toast: (msg: string) => void }) {
       </form>
       {list.isError && <p className="notice notice-error">Couldn't load the list.</p>}
       {list.data && items.length === 0 && (
-        <p className="empty">Nothing to buy. Add something here, or tell Abdo.</p>
+        <p className="empty">Nothing to buy.</p>
       )}
       <GoingShopping toast={toast} />
       <ul className="rows">
@@ -161,7 +161,7 @@ function Fridge({ toast }: { toast: (msg: string) => void }) {
           <button className="btn" disabled={!item.trim()}>Add</button>
         </div>
       </form>
-      {q.data && items.length === 0 && <p className="empty">Nothing tracked. Add food with an expiry to get a heads-up.</p>}
+      {q.data && items.length === 0 && <p className="empty">Nothing in the fridge.</p>}
       <ul className="rows">
         {items.map((f) => (
           <li className="row" key={f.id}>
@@ -247,7 +247,7 @@ function Polls({ toast }: { toast: (msg: string) => void }) {
             <span className="row-main">
               <span className="row-title">{p.question}</span>
               <span className="row-meta">
-                Closed: {winners.length ? `${winners.join(" / ")} (${top} vote${top === 1 ? "" : "s"})` : "no votes"}
+                {winners.length ? `${winners.join(" / ")} won, ${top} vote${top === 1 ? "" : "s"}` : "Closed, no votes"}
               </span>
             </span>
             {p.mine && <button className="btn btn-quiet btn-small" onClick={() => void remove(p)}>Delete</button>}
@@ -259,11 +259,6 @@ function Polls({ toast }: { toast: (msg: string) => void }) {
         return (
           <div className="poll" key={p.id}>
             <p className="poll-q">{p.question}</p>
-            <p className="row-meta">
-              {p.created_by_name ? `Asked by ${p.mine ? "you" : p.created_by_name}. ` : ""}
-              {p.waiting_on.length ? `Waiting on ${p.waiting_on.join(", ")}.` : "Everyone voted."}
-              {p.my_vote !== null && " Tap your choice again to remove your vote."}
-            </p>
             <ul className="poll-options">
               {p.options.map((o, i) => (
                 <li key={i}>

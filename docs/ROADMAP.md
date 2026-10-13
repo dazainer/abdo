@@ -73,7 +73,8 @@ Split in two so each half ships on its own.
 - **Deadlines & midterms:** per-person dates with countdowns in the briefing.
 - **Groceries+:** "we're out of X", who's going shopping, expiry tracking for perishables.
 - **Polls:** "where are we eating?"
-- **Buses:** GRT/ION next departures (GRT publishes GTFS + GTFS-realtime; verify access when speccing).
+- **Buses:** GRT/ION next departures for saved trips, from the API behind GRT's own departures
+  site (GRT's GTFS host was down and its realtime off for everyone in Oct 2026). Built in 7b.4.
 - **Travel mode (keep it simple):** a status can carry a city ("away in Montreal till Sunday").
   Abdo geocodes it (Open-Meteo geocoding: free, no key). Until the status ends, *that person's*
   prayer notifications, Today prayer times, and briefing weather use the city. Everyone else

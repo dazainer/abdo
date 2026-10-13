@@ -58,6 +58,7 @@ class FakeDB:
         self.classes = []
         self.exams = []
         self.pantry = []
+        self.bus = []                # saved bus trips (dicts shaped like the bus_trips rows)
         self.polls = []
         self.votes = []
 
@@ -422,6 +423,9 @@ class FakeDB:
                 if p["status"] in ("expected", "arrived")
                 and (owner_id is None or p["owner_id"] == owner_id)]
 
+    async def bus_trips(self):
+        return list(self.bus)
+
     async def update_package_status(self, package_id, status):
         for p in self.packages:
             if p["id"] == package_id and p["status"] in ("expected", "arrived"):
@@ -448,7 +452,7 @@ for _name in ("get_member_by_telegram_id", "roster_string", "get_member_id_by_na
               "search_facts", "upsert_location", "get_location", "get_all_locations",
               "add_shopping_item", "get_shopping_list", "mark_item_bought",
               "clear_shopping_list", "add_package", "get_open_packages",
-              "update_package_status"):
+              "update_package_status", "bus_trips"):
     setattr(db, _name, getattr(fake, _name))
 
 
@@ -2569,6 +2573,142 @@ def test_web_fridge_polls():
         fake.pantry, fake.polls, fake.votes, fake.shopping = [], [], [], []
 
 
+# Made-up stops and routes (the real ones live in the gitignored local/bus_trips.sql).
+BUS_TRIPS = [
+    {"id": 1, "name": "Home stop", "from_stops": ["100", "101"], "to_stops": [], "routes": []},
+    {"id": 2, "name": "Groceries", "from_stops": ["101"], "to_stops": ["205"], "routes": []},
+    {"id": 3, "name": "Groceries -> home", "from_stops": ["206"], "to_stops": ["100"], "routes": []},
+    {"id": 4, "name": "Mall", "from_stops": ["101", "300"], "to_stops": ["399"], "routes": []},
+]
+
+
+def _arrival(route, headsign, stop, at, stops, kind="SCHEDULED", delay=0):
+    """One GRT arrivals row: departs `stop` at `at`; `stops` is the trip's [(id, "HH:MM")]."""
+    day = "2026-10-14T"
+    return {"stop": {"id": stop, "name": f"Stop {stop}"}, "route": {"shortName": route},
+            "trip": {"headsign": headsign, "stops": [{"stop": {"id": s, "name": f"Stop {s}"},
+                                                      "departure": f"{day}{hm}:00-04:00"} for s, hm in stops]},
+            "type": kind, "departure": f"{day}{at}:00-04:00", "departureDeltaFromScheduledSeconds": delay}
+
+
+GRT_ROWS = {
+    ("100", "101"): [
+        _arrival("7", "North", "101", "16:05", [("90", "16:00"), ("101", "16:05"), ("205", "16:12")]),
+        _arrival("7", "South", "100", "16:08", [("206", "16:00"), ("100", "16:08"), ("80", "16:15")]),
+    ],
+    ("101",): [
+        _arrival("7", "North", "101", "15:50", [("101", "15:50"), ("205", "15:57")]),          # already gone
+        _arrival("9", "East", "101", "16:01", [("101", "16:01"), ("150", "16:10")]),           # doesn't go there
+        _arrival("7", "North", "101", "16:05", [("90", "16:00"), ("101", "16:05"), ("205", "16:12")]),
+        _arrival("7", "North", "101", "16:35", [("101", "16:35"), ("205", "16:42")], kind="REALTIME", delay=180),
+        _arrival("7", "North", "101", "16:50", [("101", "16:50"), ("205", "16:57")], kind="CANCELED"),
+    ],
+    ("206",): [_arrival("7", "South", "206", "16:20", [("205", "16:19"), ("206", "16:20"), ("100", "16:28")])],
+    ("101", "300"): [
+        _arrival("301", "301 North", "300", "16:03", [("300", "16:03"), ("399", "16:20")]),
+        _arrival("7", "North", "101", "16:05", [("101", "16:05"), ("205", "16:12")]),
+    ],
+}
+
+
+async def test_buses():
+    print("Scenario: buses: GRT departures matched to saved trips")
+    from app import transit
+    now = datetime(2026, 10, 14, 16, 0, tzinfo=TZ)
+    calls = []
+
+    async def fake_post(stops):
+        calls.append(tuple(stops))
+        return GRT_ROWS[tuple(sorted(stops))]
+
+    real_post, real_now = transit._post, transit.now
+    transit._post, transit._cache, transit.now = fake_post, {}, lambda: now
+    try:
+        trips = BUS_TRIPS
+        deps = await transit.next_for(trips[1], now)
+        check("only departures that reach the stop, in time order, cancelled dropped",
+              [(d["route"], d["at"].strftime("%H:%M")) for d in deps] == [("7", "16:05"), ("7", "16:35")])
+        check("arrival time at the destination comes from the trip itself",
+              deps[0]["arrive"].strftime("%H:%M") == "16:12" and deps[0]["in_min"] == 5)
+        check("live and delay read from GRT", deps[1]["live"] and deps[1]["delay_min"] == 3 and not deps[0]["live"])
+        await transit.next_for(trips[1], now)
+        check("a second look within a minute is served from the cache", calls.count(("101",)) == 1)
+        home = await transit.next_for(trips[0], now)
+        check("a trip without a destination lists every departure", [d["headsign"] for d in home] == ["North", "South"])
+        mall = await transit.next_for(trips[3], now)
+        check("several boarding stops: any route that gets there", [d["route"] for d in mall] == ["301"])
+        check("ION headsign without the repeated route number", mall[0]["headsign"] == "North")
+        check("direction settles itself (southbound trip isn't 'Groceries')",
+              all(d["headsign"] == "North" for d in deps))
+
+        check("find_trip: exact name", transit.find_trip(trips, "groceries")["id"] == 2)
+        check("find_trip: words as said", transit.find_trip(trips, "groceries home")["id"] == 3)
+        check("find_trip: unknown -> None", transit.find_trip(trips, "airport") is None)
+
+        fake.bus = trips
+        out = await tools.run_tool("next_bus", {"trip": "groceries"}, 1)
+        check("tool: times, arrival, live marker",
+              "7 to North at 4:05 PM (in 5 min)" in out and "gets to Stop 205 4:12 PM" in out
+              and "live, 3 min late" in out)
+        out = await tools.run_tool("next_bus", {}, 1)
+        check("tool: no trip -> the stop by home, flagged as scheduled",
+              out.startswith("Home stop") and "scheduled times" in out and "Other saved trips: Home stop, Groceries" in out)
+        out = await tools.run_tool("next_bus", {"trip": "airport"}, 1)
+        check("tool: unknown trip lists the saved ones", out.startswith("ERROR") and "Mall" in out)
+        out = await tools.run_tool("next_bus", {"trip": "mall", "route": "7"}, 1)
+        check("tool: route filter", "Nothing" in out or "nothing" in out)
+
+        async def down(stops):
+            raise RuntimeError("timeout")
+        transit._post, transit._cache = down, {}
+        out = await tools.run_tool("next_bus", {"trip": "groceries"}, 1)
+        check("tool: GRT down -> honest error, no times", out.startswith("ERROR") and "PM" not in out)
+        ov = await transit.overview(trips, now)
+        check("overview: each trip fails on its own", all(not t["ok"] for t in ov) and len(ov) == 4)
+        fake.bus = []
+        check("tool: nothing saved", "No bus trips" in await tools.run_tool("next_bus", {}, 1))
+    finally:
+        transit._post, transit._cache, transit.now = real_post, {}, real_now
+        fake.bus = []
+
+
+def test_web_buses():
+    print("Scenario: web buses")
+    import re
+    from fastapi.testclient import TestClient
+    from app import main as app_main, transit
+    settings.session_pepper = "test-pepper"
+    dms = []
+
+    async def capture(chat_id, text, disable_notification=False):
+        dms.append(text)
+
+    async def fake_post(stops):
+        return GRT_ROWS.get(tuple(sorted(stops)), [])
+
+    real_send, real_post, real_now = telegram.send_message, transit._post, transit.now
+    telegram.send_message, transit._post, transit._cache = capture, fake_post, {}
+    transit.now = lambda: datetime(2026, 10, 14, 16, 0, tzinfo=TZ)
+    H = {"X-Abdo": "1"}
+    fake.codes.clear()
+    fake.bus = BUS_TRIPS
+    try:
+        c = TestClient(app_main.app, base_url="https://testserver")
+        check("buses need a login", c.get("/api/buses").status_code == 401)
+        c.post("/api/auth/request-code", json={"name": "Zain"}, headers=H)
+        c.post("/api/auth/verify", json={"name": "Zain", "code": re.search(r"\b(\d{6})\b", dms[-1]).group(1)}, headers=H)
+        r = c.get("/api/buses")
+        trips = r.json()["trips"]
+        check("every saved trip, in order", r.status_code == 200 and [t["name"] for t in trips] == [t["name"] for t in BUS_TRIPS])
+        check("trips with departures", [len(t["departures"]) for t in trips] == [2, 2, 1, 1])
+        check("departures carry route, time, and arrival",
+              all(t["ok"] for t in trips) and all({"route", "at", "in_min", "live", "arrive"} <= set(d) for t in trips for d in t["departures"]))
+    finally:
+        telegram.send_message, transit._post, transit._cache, transit.now = real_send, real_post, {}, real_now
+        settings.session_pepper = None
+        fake.bus = []
+
+
 def test_tts_model_routing():
     print("Scenario: digit-bearing replies route to multilingual_v2")
     from app import tts
@@ -2626,6 +2766,7 @@ async def main():
     test_quest_parser()
     await test_who_is_free_and_exams()
     await test_fridge_shopping_polls()
+    await test_buses()
     print(f"\n{passed} passed, {failed} failed")
 
 
@@ -2640,5 +2781,6 @@ if __name__ == "__main__":
     test_web_money()
     test_web_schedule()
     test_web_fridge_polls()
+    test_web_buses()
     print(f"\nTOTAL: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

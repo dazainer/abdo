@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = True              # the background loop (off in tests/demo)
     prayer_method: str = "NORTH_AMERICA"        # adhanpy CalculationMethod name (ISNA)
     prayer_asr: str = "SHAFI"                   # SHAFI (standard) or HANAFI
+    # Buses (Phase 7b.4): the GraphQL API behind GRT's own departures site (stoptimes.grt.ca).
+    # Not a documented open-data API, so it's configurable and every failure is reported, never guessed.
+    grt_api_url: str = "https://grtivr-prod.regionofwaterloo.9802690.ca/vms/graphql"
 
 
 settings = Settings()

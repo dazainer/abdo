@@ -536,6 +536,20 @@ TOOLS = [
         },
     },
     {
+        "name": "next_bus",
+        "description": (
+            "Next buses/ION for the suite's saved trips, from GRT (when each leaves, when it gets "
+            "there, whether it's live or just scheduled). trip: a saved trip as said (e.g. 'groceries', "
+            "'mall', 'mall home'). route: a route number to filter ('301' is the ION). Omit trip for "
+            "the stop by home. Never state a bus time this tool didn't return."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"trip": {"type": "string"}, "route": {"type": "string"}},
+            "required": [],
+        },
+    },
+    {
         "name": "add_package",
         "description": (
             "Record an incoming package/delivery for someone in the suite, so everyone knows "
@@ -926,6 +940,32 @@ async def _poll_tool(name: str, tool_input: dict, member_id: int | None) -> str:
     return f"Unknown tool: {name}"
 
 
+async def _bus_tool(tool_input: dict) -> str:
+    from app import transit
+    trips = await db.bus_trips()
+    if not trips:
+        return "No bus trips are saved yet, so there's nothing to look up. Say so; don't guess times."
+    names = ", ".join(t["name"] for t in trips)
+    said = (tool_input.get("trip") or "").strip()
+    if said:
+        trip = transit.find_trip(trips, said)
+        if trip is None:
+            return f"ERROR: no saved trip matches '{said}'. Saved trips: {names}. Ask which one."
+    else:
+        trip = next((t for t in trips if not t["to_stops"]), trips[0])
+    route = (tool_input.get("route") or "").strip().upper().removeprefix("ROUTE ").strip()
+    if route:
+        trip = {**dict(trip), "routes": [route]}
+    try:
+        deps = await transit.next_for(trip, transit.now())
+    except transit.TransitError:
+        return "ERROR: couldn't reach GRT's departures right now. Say so; do NOT guess times."
+    out = transit.describe(trip, deps)
+    if deps and not any(d["live"] for d in deps):
+        out += " These are scheduled times (no live tracking right now)."
+    return out + f" Other saved trips: {names}."
+
+
 def time_of(raw):
     """'19:00' -> time, None -> None. Raises ValueError for junk."""
     if not raw:
@@ -1235,6 +1275,9 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
 
     if name in ("create_poll", "vote", "poll_results", "close_poll"):
         return await _poll_tool(name, tool_input, member_id)
+
+    if name == "next_bus":
+        return await _bus_tool(tool_input)
 
     if name == "get_briefing":
         from app import briefing   # imported here: briefing imports this module
