@@ -15,8 +15,8 @@ from app.config import settings
 ORDER = ("fajr", "sunrise", "dhuhr", "asr", "maghrib", "isha")
 PRAYERS = ("fajr", "dhuhr", "asr", "maghrib", "isha")       # sunrise isn't a prayer
 NAMES = {
-    "fajr": ("الفجر", "Fajr"), "sunrise": ("الشروق", "Sunrise"), "dhuhr": ("الضهر", "Dhuhr"),
-    "asr": ("العصر", "Asr"), "maghrib": ("المغرب", "Maghrib"), "isha": ("العشا", "Isha"),
+    "fajr": ("الفجر", "Fajr"), "sunrise": ("الشروق", "Sunrise"), "dhuhr": ("الظهر", "Dhuhr"),
+    "asr": ("العصر", "Asr"), "maghrib": ("المغرب", "Maghrib"), "isha": ("العشاء", "Isha"),
 }
 
 

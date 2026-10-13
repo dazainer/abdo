@@ -135,7 +135,10 @@ export interface WeatherHour {
 }
 
 export interface Briefing {
-  greeting: string;
+  greeting: string; // the whole phrase, as notifications say it
+  greeting_main: string;
+  greeting_tail: string; // part of the phrase, set smaller ("" if none)
+  greeting_named: boolean; // add "يا <name>" after the main phrase
   name: string;
   date: string;
   day: string; // "Monday 12 October"

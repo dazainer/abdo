@@ -147,8 +147,17 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   parse it; the whole app goes blank).
 - **Design system** (Impeccable): `PRODUCT.md` is the product brief, the Today surface brief and
   direction contract live in `.impeccable/surfaces/`. Today is the home screen (`/`; `/today`
-  redirects for old notification links); chat is `/chat`. Dark theme only. Every fact appears
-  once on Today: today's things are stops on the line, later things are under "Coming up".
+  redirects for old notification links); chat is `/chat`; buses are their own screen
+  (`/buses`, from the bus button on Today), never stops on the line. Dark theme only. Every fact
+  appears once on Today: today's things are stops on the line, later things are under "Coming
+  up". Greetings come from `briefing.greeting()` (the suite's own phrases, weekday/weekend and
+  morning/evening, fixed per person per half-day). Prayer names are MSA (الظهر، العشاء), not
+  dialect.
+- **Today opens from a snapshot** (`web/src/lib/snapshot.ts`): the last me/today/briefing/
+  exams/calendar answers are kept in localStorage and shown at once, then refetched. A 401
+  always wins over the saved "me", and logout clears it. The briefing also runs its calendar
+  read and weather fetch concurrently, and the app's calendar views share a 60 s read cache
+  (`read_calendar(..., cached=True)`; Abdo's tools always read fresh; writes clear it).
 - **Proactive sends (`scheduler.py`) are claimed in the DB before delivery**: a reminder row is
   flipped to `done` with `UPDATE … WHERE NOT done RETURNING`, daily sends insert into
   `sent_log` (`ON CONFLICT DO NOTHING RETURNING`). Railway's zero-downtime deploys briefly run

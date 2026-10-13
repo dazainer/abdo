@@ -3,6 +3,7 @@ import { Route, Routes, Navigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type Member } from "./api";
 import { TabBar } from "./components/TabBar";
+import { clearSnapshot } from "./lib/snapshot";
 import { Login } from "./pages/Login";
 import { Chat } from "./pages/Chat";
 import { Lists } from "./pages/Lists";
@@ -10,6 +11,7 @@ import { Today } from "./pages/Today";
 import { Money } from "./pages/Money";
 import { Schedule } from "./pages/Schedule";
 import { Settings } from "./pages/Settings";
+import { Buses } from "./pages/Buses";
 
 function useToast() {
   const [message, setMessage] = useState<string | null>(null);
@@ -38,6 +40,7 @@ export function App() {
   useEffect(() => {
     return qc.getQueryCache().subscribe((event) => {
       const err = event.query.state.error;
+      if (err instanceof ApiError && err.status === 401) clearSnapshot();
       if (err instanceof ApiError && err.status === 401 && event.query.queryKey[0] !== "me") {
         void qc.invalidateQueries({ queryKey: ["me"] });
       }
@@ -48,10 +51,13 @@ export function App() {
     qc.setQueryData(["me"], { member: m });
   };
   const loggedOut = () => {
+    clearSnapshot();
     qc.clear();
     void qc.invalidateQueries({ queryKey: ["me"] });
   };
 
+  // A saved copy of "me" (lib/snapshot) draws the app instantly; a 401 always wins over it.
+  const signedOut = me.error instanceof ApiError && me.error.status === 401;
   let body;
   if (!me.data && !me.isFetched) {
     body = null; // first load only; later refetches never unmount the login screen
@@ -62,7 +68,7 @@ export function App() {
         <button className="btn" onClick={() => void me.refetch()}>Try again</button>
       </main>
     );
-  } else if (!me.data) {
+  } else if (!me.data || signedOut) {
     body = <Login onLoggedIn={loggedIn} />;
   } else {
     const member = me.data.member;
@@ -77,6 +83,7 @@ export function App() {
             <Route path="/today" element={<Navigate to="/" replace />} />
             <Route path="/calendar" element={<Navigate to="/" replace />} />
             <Route path="/money" element={<Money toast={toast.show} />} />
+            <Route path="/buses" element={<Buses />} />
             <Route path="/schedule" element={<Schedule toast={toast.show} />} />
             <Route path="/settings" element={<Settings me={member} onLoggedOut={loggedOut} toast={toast.show} />} />
             <Route path="*" element={<Navigate to="/" replace />} />

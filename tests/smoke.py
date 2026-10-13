@@ -435,6 +435,7 @@ class FakeDB:
 
 
 fake = FakeDB()
+tools.CALENDAR_CACHE_SECONDS = 0     # every calendar scenario changes the fake events; test the cache on its own
 for _name in ("get_member_by_telegram_id", "roster_string", "get_member_id_by_name",
               "get_member", "thread_page", "create_login_code", "count_recent_login_codes",
               "latest_live_login_code", "bump_login_code_attempts", "use_login_code",
@@ -1844,6 +1845,35 @@ async def test_scheduler():
             m.pop("prefs", None)
 
 
+async def test_calendar_view_cache():
+    print("Scenario: the app's calendar reads are cached for a minute; Abdo's never are")
+    global _fake_events
+    calls = []
+    real = calendar_svc.get_events
+
+    def counting(days):
+        calls.append(days)
+        return list(_fake_events)
+
+    calendar_svc.get_events = counting
+    tools.CALENDAR_CACHE_SECONDS = 60
+    tools.invalidate_calendar_cache()
+    try:
+        _fake_events = [{"id": "e1", "summary": "A", "start": "2026-10-14T19:00:00-04:00"}]
+        await tools.read_calendar(7, cached=True)
+        await tools.read_calendar(7, cached=True)
+        check("two app reads, one Google call", calls == [7])
+        await tools.read_calendar(7)
+        check("Abdo's read goes to Google", calls == [7, 7])
+        tools.invalidate_calendar_cache()
+        await tools.read_calendar(7, cached=True)
+        check("a write clears the cache", calls == [7, 7, 7])
+    finally:
+        calendar_svc.get_events = real
+        tools.CALENDAR_CACHE_SECONDS = 0
+        tools.invalidate_calendar_cache()
+
+
 def test_weather_hours():
     print("Scenario: hourly forecast strip")
     from app import briefing
@@ -1889,7 +1919,8 @@ async def test_briefing_build():
     briefing._fetch_weather, briefing._weather_cache = good, {}
     try:
         title, body = await briefing.build(ZAIN, now)
-        check("greets by Arabic name", title.startswith("صباح الخير يا زين"))
+        check("greets by Arabic name with a weekday morning phrase",
+              title.startswith(("صباح الفل يا زين", "صباح الورد يا زين", "صحي النوم يا زين")))
         check("weather line from real numbers",
               "Weather: 3°, feels like -1°, light snow. High 5°, low -2°, 60% chance" in body)
         check("only today's events", "Today: Suite dinner at 19:00" in body and "Not today" not in body)
@@ -1905,9 +1936,28 @@ async def test_briefing_build():
         check("structured events/packages/groceries",
               b["events"] == [{"summary": "Suite dinner", "time": "19:00"}] and b["waiting"] == ["desk lamp"]
               and b["groceries"] == 1 and b["calendar_ok"] is True)
-        check("greeting follows the time of day",
-              briefing.greeting(now) == "صباح الخير" and briefing.greeting(now.replace(hour=15)) == "أهلاً"
-              and briefing.greeting(now.replace(hour=20)) == "مساء الخير")
+        G = briefing.greeting
+        mornings = {"صباح الفل", "صباح الورد", "صحي النوم"}
+        evenings = {"مساء الفل", "مساء العسل", "مسا مسا"}
+        check("weekday morning / evening phrases (Wednesday)",
+              G(now)["main"] in mornings and G(now.replace(hour=15))["main"] in evenings
+              and G(now.replace(hour=2))["main"] in evenings)
+        sat = now.replace(day=17)                    # Saturday 17 October 2026
+        weekend_morning = {(G(sat, m)["main"], G(sat, m)["tail"]) for m in range(40)}
+        check("weekend mornings use the weekend phrases, tail set apart",
+              weekend_morning == {("صباح الورد والتجلي", "حسب التوقيت المحلي"), ("صباح الفل", "يا سيد الكل")})
+        check("the sun-down line only after sunset",
+              all(G(sat.replace(hour=14), m)["main"] == "مساء العسل" for m in range(20))
+              and "الشمس نزلت" in {G(sat.replace(hour=20), m)["main"] for m in range(40)})
+        check("same person, same day, same half: the same greeting",
+              G(now, 1) == G(now.replace(hour=11, minute=59), 1))
+        check("complete phrases stand alone; short ones take the name",
+              briefing.greeting_text({"main": "مسا مسا", "tail": "", "named": False}, "زين") == "مسا مسا"
+              and briefing.greeting_text({"main": "مساء الفل", "tail": "", "named": True}, "زين") == "مساء الفل يا زين"
+              and briefing.greeting_text({"main": "مساء العسل", "tail": "والدلع والكسل", "named": False}, "زين")
+              == "مساء العسل والدلع والكسل")
+        check("structured greeting for the app",
+              b["greeting_main"] in mornings and b["greeting_named"] is True and b["greeting"].endswith("يا زين"))
 
         briefing._fetch_weather, briefing._weather_cache = bad, {}
         _, body = await briefing.build(ZAIN, now)
@@ -2799,6 +2849,7 @@ async def main():
     await test_notify_deliver()
     await test_scheduler()
     test_weather_hours()
+    await test_calendar_view_cache()
     await test_briefing_build()
     test_money_math()
     await test_money_tools()

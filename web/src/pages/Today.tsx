@@ -19,7 +19,10 @@ export function Today({ me, toast }: { me: Member; toast: (msg: string) => void 
 
   return (
     <div className="page">
-      <header className="screen-head"><Sign ar="النهاردة" en="Today" /></header>
+      <header className="screen-head">
+        <Sign ar="النهاردة" en="Today" />
+        <Link to="/buses" className="head-action" aria-label="Buses"><Icon name="bus" /></Link>
+      </header>
       <main className="screen">
         <BriefingPlate q={brief} />
         {brief.data && <NeedsYou b={brief.data} />}
@@ -58,7 +61,10 @@ function BriefingPlate({ q }: { q: { data?: Briefing; isPending: boolean; isErro
   return (
     <section className="plate briefing" aria-labelledby="briefing-title">
       <p className="briefing-day">{d.day}{d.place ? `, in ${d.place}` : ""}</p>
-      <h2 className="briefing-title" id="briefing-title" dir="rtl" lang="ar">{d.greeting} يا {d.name}</h2>
+      <h2 className="briefing-title" id="briefing-title" dir="rtl" lang="ar">
+        {d.greeting_main}{d.greeting_named ? ` يا ${d.name}` : ""}
+        {d.greeting_tail && <span className="briefing-tail">{d.greeting_tail}</span>}
+      </h2>
       {w && (
         <>
           <div className="briefing-weather">
@@ -181,7 +187,7 @@ function DayLine({ me, today, brief, exams, toast }: {
       });
     }
     for (const c of brief?.classes ?? []) {
-      out.push({ key: `c-${c.from}-${c.what}`, at: at(day, c.from), kind: "class", title: c.what, sub: `Until ${c.to}` });
+      out.push({ key: `c-${c.from}-${c.what}`, at: at(day, c.from), kind: "class", title: c.what, sub: `Until ${short(at(day, c.to))}` });
     }
     for (const e of brief?.events ?? []) {
       out.push({ key: `e-${e.summary}-${e.time}`, at: e.time ? at(day, e.time) : null, kind: "event", title: e.summary });
@@ -226,7 +232,6 @@ function DayLine({ me, today, brief, exams, toast }: {
         <li className="now-mark">
           <span className="now-label">Now {nowT.t} <small>{nowT.ap}</small></span>
         </li>
-        <BusStop />
         {later.map((s) => <StopRow key={s.key} s={s} />)}
         {later.length === 0 && (
           <li className="stop stop-end"><span className="stop-time" /><span className="row-meta">Nothing else today</span></li>
@@ -252,50 +257,6 @@ function StopRow({ s, past = false }: { s: Stop; past?: boolean }) {
         {s.sub && <span className="row-meta">{s.sub}</span>}
       </span>
       {s.action}
-    </li>
-  );
-}
-
-// The next buses from the stop by home, as a stop right after "now". Tap for every trip.
-function BusStop() {
-  const [open, setOpen] = useState(false);
-  const home = useQuery({ queryKey: ["buses", "home"], queryFn: () => api.buses(true), refetchInterval: 60_000, retry: 0 });
-  const all = useQuery({ queryKey: ["buses"], queryFn: () => api.buses(), enabled: open, refetchInterval: open ? 60_000 : false });
-  const trip = home.data?.trips[0];
-  const deps = trip?.ok ? trip.departures : [];
-  if (!deps.length) return null;
-  const live = deps.some((d) => d.live);
-  return (
-    <li className="stop stop-bus">
-      <span className="stop-time"><Time ms={new Date(deps[0].at).getTime()} /></span>
-      <span className="stop-main">
-        <button className="stop-toggle" onClick={() => setOpen(!open)} aria-expanded={open}
-                aria-label={`${deps[0].route} to ${deps[0].headsign}, in ${deps[0].in_min} minutes. ${open ? "Hide" : "Show"} every saved trip`}>
-          <span className="row-title">
-            {deps[0].route} to {deps[0].headsign} <span className="bus-in">in {deps[0].in_min} min</span>
-            <span className="chev"><Icon name="chevron" /></span>
-          </span>
-          <span className="row-meta">
-            {[...deps.slice(1).map((d) => `${d.route} in ${d.in_min} min`), live ? "" : "scheduled, not live"]
-              .filter(Boolean).join(", ")}
-          </span>
-        </button>
-        {open && (
-          <ul className="bus-trips">
-            {all.isPending && <li className="row-meta">Checking GRT…</li>}
-            {all.isError && <li className="row-meta">Couldn't reach GRT.</li>}
-            {all.data?.trips.filter((t) => t.departures.length || !t.ok).map((t) => (
-              <li key={t.name}>
-                <span className="bus-trip-name">{t.name}</span>
-                <span className="row-meta">
-                  {!t.ok ? "Couldn't reach GRT" : t.departures.map((d) =>
-                    `${d.route}${d.then_route ? ` (then ${d.then_route})` : ""} at ${clock(d.at)}`).join(", ")}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </span>
     </li>
   );
 }
@@ -347,7 +308,7 @@ function Around({ me, today, toast }: { me: Member; today?: TodayData; toast: (m
   }
 
   return (
-    <section className="section" aria-labelledby="around">
+    <section className="section panel" aria-labelledby="around">
       <h2 className="section-title" id="around">Around</h2>
       <p className="free">
         <span className="free-label">Free together</span>
@@ -389,7 +350,10 @@ function Around({ me, today, toast }: { me: Member; today?: TodayData; toast: (m
 
 // ---- coming up: exams, reminders and calendar after today, by day ------------------
 
-type Upcoming = { key: string; day: string; sortTime: string; at: number | null; title: ReactNode; sub?: string; action?: ReactNode };
+type Upcoming = {
+  key: string; day: string; sortTime: string; at: number | null; icon: IconName;
+  title: ReactNode; sub?: string; action?: ReactNode;
+};
 
 function hhmm(iso: string): string {
   const d = new Date(iso);
@@ -426,25 +390,25 @@ function ComingUp({ me, exams, reminders, toast }: {
 
   const items: Upcoming[] = [
     ...exams.filter((x) => dayOf(x.starts_at) > day).map((x) => ({
-      key: `x-${x.id}`, day: dayOf(x.starts_at), sortTime: hhmm(x.starts_at), at: new Date(x.starts_at).getTime(),
+      key: `x-${x.id}`, day: dayOf(x.starts_at), sortTime: hhmm(x.starts_at), at: new Date(x.starts_at).getTime(), icon: "pencil" as IconName,
       title: <><strong>{x.member_id === me.id ? "Your" : `${x.name}:`}</strong> {x.course} {x.kind}</>,
       sub: x.room ?? undefined,
       action: x.can_delete ? <button className="btn btn-quiet btn-small" onClick={() => void removeExam(x.id)}>Remove</button> : undefined,
     })),
     ...reminders.filter((r) => dayOf(r.due_at) > day).map((r) => ({
-      key: `r-${r.id}`, day: dayOf(r.due_at), sortTime: hhmm(r.due_at), at: new Date(r.due_at).getTime(), title: r.text,
+      key: `r-${r.id}`, day: dayOf(r.due_at), sortTime: hhmm(r.due_at), at: new Date(r.due_at).getTime(), icon: "bell" as IconName, title: r.text,
       sub: r.set_by ? `Reminder from ${r.set_by}` : "Reminder",
       action: <button className="btn btn-quiet btn-small" onClick={() => void cancelReminder(r.id)}>Cancel</button>,
     })),
     ...(cal.data?.events ?? []).filter((e: CalendarEvent) => e.date > day).map((e) => ({
-      key: `e-${e.id}`, day: e.date, sortTime: e.time ?? "00:00", at: e.time ? at(e.date, e.time) : null,
+      key: `e-${e.id}`, day: e.date, sortTime: e.time ?? "00:00", at: e.time ? at(e.date, e.time) : null, icon: "calendar" as IconName,
       title: e.summary,
     })),
   ].sort((a, b) => (a.day + a.sortTime).localeCompare(b.day + b.sortTime));
 
   const days = [...new Set(items.map((i) => i.day))];
   return (
-    <section className="section" aria-labelledby="coming-up">
+    <section className="section panel" aria-labelledby="coming-up">
       <h2 className="section-title" id="coming-up">Coming up</h2>
       {cal.isError && (
         <p className="notice notice-error" role="alert">
@@ -461,6 +425,7 @@ function ComingUp({ me, exams, reminders, toast }: {
           <ul className="rows">
             {items.filter((i) => i.day === d).map((i) => (
               <li className="row" key={i.key}>
+                <span className={`up-icon up-${i.icon}`}><Icon name={i.icon} /></span>
                 <span className="up-time"><Time ms={i.at} /></span>
                 <span className="row-main">
                   <span className="row-title">{i.title}</span>

@@ -361,7 +361,7 @@ async def calendar(days: int = Query(default=7, ge=1, le=31), member=Depends(cur
     if not calendar_svc.is_configured():
         return {"configured": False, "events": []}
     try:
-        events = await read_calendar(days)
+        events = await read_calendar(days, cached=True)
     except calendar_svc.CalendarReadError:
         # A degraded read must never look like an empty calendar.
         raise HTTPException(503, "couldn't reach the calendar, try again in a moment")

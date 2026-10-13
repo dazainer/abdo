@@ -85,7 +85,7 @@ function Groceries({ toast }: { toast: (msg: string) => void }) {
 
   const items = list.data?.items ?? [];
   return (
-    <section className="section" aria-labelledby="groceries">
+    <section className="section panel" aria-labelledby="groceries">
       <h2 className="section-title" id="groceries">Groceries</h2>
       <form className="inline-form" onSubmit={add}>
         <input className="field" dir="auto" value={item} onChange={(e) => setItem(e.target.value)}
@@ -174,7 +174,7 @@ function Fridge({ toast }: { toast: (msg: string) => void }) {
 
   const items = q.data?.items ?? [];
   return (
-    <section className="section" aria-labelledby="fridge">
+    <section className="section panel" aria-labelledby="fridge">
       <h2 className="section-title" id="fridge">Fridge</h2>
       <form onSubmit={add} style={{ display: "grid", gap: 8, margin: "8px 0 4px" }}>
         <div className="inline-form" style={{ margin: 0 }}>
@@ -265,7 +265,7 @@ function Polls({ toast }: { toast: (msg: string) => void }) {
   const polls = q.data?.polls ?? [];
   const filled = options.map((o) => o.trim()).filter(Boolean).length;
   return (
-    <section className="section" aria-labelledby="polls">
+    <section className="section panel" aria-labelledby="polls">
       <h2 className="section-title" id="polls">Polls</h2>
       {polls.filter((p) => p.closed).map((p) => {
         // Closed polls shrink to one results line and drop off after a day.
@@ -391,7 +391,7 @@ function Packages({ toast }: { toast: (msg: string) => void }) {
   );
 
   return (
-    <section className="section" aria-labelledby="packages">
+    <section className="section panel" aria-labelledby="packages">
       <h2 className="section-title" id="packages">Packages</h2>
       {list.isError && <p className="notice notice-error">Couldn't load packages.</p>}
 

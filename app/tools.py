@@ -600,16 +600,33 @@ TOOLS = [
 ]
 
 
-async def read_calendar(days_ahead: int):
+# The app's screens (Today, the briefing) read the same 7-day window over and over; a
+# Google round-trip is the slowest part of opening Today. They may reuse a read for a
+# minute. Abdo's own calendar tools always read fresh, and every write clears this.
+CALENDAR_CACHE_SECONDS = 60
+_calendar_cache: dict[int, tuple[float, list]] = {}
+
+
+def invalidate_calendar_cache() -> None:
+    _calendar_cache.clear()
+
+
+async def read_calendar(days_ahead: int, *, cached: bool = False):
     """Read upcoming events, retrying once on a degraded read. googleapiclient is
     blocking, so each attempt runs off the event loop. A persistent failure raises
     CalendarReadError — the caller turns that into an honest 'try again' and STOPS,
-    never falling through to an empty-and-proceed."""
+    never falling through to an empty-and-proceed. A failed read is never cached."""
+    import time as _t
+    hit = _calendar_cache.get(days_ahead) if cached else None
+    if hit and _t.monotonic() - hit[0] < CALENDAR_CACHE_SECONDS:
+        return hit[1]
     try:
-        return await asyncio.to_thread(calendar_svc.get_events, days_ahead)
+        events = await asyncio.to_thread(calendar_svc.get_events, days_ahead)
     except calendar_svc.CalendarReadError:
         log.warning("calendar read failed; retrying once")
-        return await asyncio.to_thread(calendar_svc.get_events, days_ahead)
+        events = await asyncio.to_thread(calendar_svc.get_events, days_ahead)
+    _calendar_cache[days_ahead] = (_t.monotonic(), events)
+    return events
 
 
 # --- time resolution for reminders and statuses (shared with the web API) ----------
@@ -1048,6 +1065,7 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
             tool_input["summary"], tool_input["day"], tool_input["time"],
             tool_input.get("end_time"),
         )
+        invalidate_calendar_cache()
         return f"Created: {ev['start']} {ev['summary']} (id: {ev['id']})."
 
     if name == "update_event":
@@ -1067,6 +1085,7 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
             log.warning("update_event read failed: %s", e)
             return ("ERROR: couldn't reach the calendar to make that change right now. "
                     "Tell the user to try again in a moment; do NOT claim it was changed.")
+        invalidate_calendar_cache()
         return f"Updated: {ev['summary']} now {ev['start']} to {ev['end']} (id: {ev['id']})."
 
     if name == "delete_event":
@@ -1082,6 +1101,7 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
             log.warning("delete_event read failed: %s", e)
             return ("ERROR: couldn't reach the calendar to delete that right now. "
                     "Tell the user to try again in a moment; do NOT claim it was deleted.")
+        invalidate_calendar_cache()
         return "Deleted the event."
 
     if name == "where_is":

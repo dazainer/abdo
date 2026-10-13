@@ -702,15 +702,6 @@ input[type="checkbox"] { accent-color: var(--plate); }
 .stop-fold { min-height: 36px; }
 .stop-fold .btn-link { color: var(--text-soft); font-size: var(--t-small); justify-self: start; }
 
-.stop-bus::before { border-radius: 3px; border-color: var(--white); background: var(--plate); }
-.stop-toggle {
-  display: block; width: 100%;
-  padding: 0; border: 0; background: none;
-  text-align: left; cursor: pointer;
-}
-.bus-trips { list-style: none; margin: 8px 0 2px; padding: 0; display: grid; gap: 8px; }
-.bus-trip-name { display: block; font-weight: 600; font-size: var(--t-small); }
-
 .now-mark {
   position: relative;
   display: flex;
@@ -767,12 +758,6 @@ input[type="checkbox"] { accent-color: var(--plate); }
 .check-label { flex: 1; display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: var(--t-small); color: var(--text-soft); cursor: pointer; }
 .check-label input { width: 20px; height: 20px; margin: 0; }
 
-/* The bus stop's detail and expand control. */
-.bus-in { color: var(--gold); font-size: var(--t-small); font-weight: 600; margin-inline-start: 4px; white-space: nowrap; }
-.chev { display: inline-flex; vertical-align: middle; margin-inline-start: 4px; color: var(--text-soft); transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
-.chev svg { width: 16px; height: 16px; }
-.stop-toggle[aria-expanded="true"] .chev { transform: rotate(90deg); }
-
 /* The line ends like a route: a terminus bar under the last stop. */
 .line::after {
   content: "";
@@ -790,5 +775,66 @@ input[type="checkbox"] { accent-color: var(--plate); }
 @keyframes now-draw { from { transform: scaleX(0); opacity: 0; } to { transform: scaleX(1); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .now-mark::before { animation: none; }
-  .chev { transition: none; }
 }
+
+/* ---- panels: sections below the line sit on their own blocks ---------------------- */
+
+.panel {
+  margin-top: 16px;
+  padding: 12px 16px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.panel > .section-title { margin-bottom: 8px; }
+.panel .rows > li:last-child, .panel .row:last-child { border-bottom: 0; }
+.panel .row { border-bottom-color: var(--snow); }
+.panel .field { background: var(--bg); }
+.panel .inline-form:first-child { margin-top: 0; }
+
+/* ---- screen head: an action beside the sign -------------------------------------- */
+
+.screen-head { position: relative; }
+.head-action, .head-back {
+  position: absolute;
+  top: calc(26px + var(--safe-t));
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 44px; height: 44px;
+  border-radius: 12px;
+  color: var(--text);
+  text-decoration: none;
+}
+.head-action { right: 12px; border: 1px solid var(--line); background: var(--surface); }
+.head-action svg { width: 22px; height: 22px; }
+.head-back { left: 8px; padding: 0 10px; font-size: var(--t-small); font-weight: 600; color: var(--text-soft); }
+
+/* ---- the greeting: main phrase large, its tail smaller beneath -------------------- */
+
+.briefing-tail { display: block; font-size: var(--t-lead); font-weight: 500; line-height: 1.6; opacity: 0.92; }
+
+/* ---- coming up: what kind of thing each row is ------------------------------------ */
+
+.up-icon { flex: 0 0 22px; display: inline-flex; color: var(--text-soft); }
+.up-icon svg { width: 20px; height: 20px; }
+.up-pencil { color: var(--gold); }
+.up-time { flex-basis: 64px; }
+
+/* ---- buses: route numbers on little enamel plates --------------------------------- */
+
+.route-plate {
+  flex: 0 0 auto;
+  min-width: 48px; height: 40px; padding: 0 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 3px var(--plate), inset 0 0 0 4.5px rgba(246, 247, 244, 0.85);
+  font-family: var(--font-sign); font-weight: 700; font-size: var(--t-lead);
+  font-variant-numeric: tabular-nums;
+}
+.departure-when { display: flex; flex-direction: column; align-items: flex-end; text-align: right; }
+.departure-in { font-family: var(--font-sign); font-weight: 600; font-size: var(--t-lead); color: var(--gold); white-space: nowrap; }
+.departure .row-meta { text-align: inherit; }
+.live { color: var(--gold); font-size: var(--t-small); font-weight: 600; }
+
+/* ---- money: payments read as transfers, not purchases ----------------------------- */
+
+.payment-amount { color: var(--text-soft); }

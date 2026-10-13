@@ -203,38 +203,49 @@ function Recent({ data, toast }: { data: MoneyOverview; toast: (msg: string) => 
   }
 
   return (
-    <section className="section" aria-labelledby="recent-exp">
-      <h2 className="section-title" id="recent-exp">Recent</h2>
-      {data.expenses.length === 0 && data.payments.length === 0 && (
-        <p className="empty">No expenses yet.</p>
-      )}
-      <ul className="rows">
-        {data.expenses.map((e) => (
-          <li className="row" key={`e${e.id}`}>
-            <span className="row-main">
-              <span className="row-title">{e.description}</span>
-              <span className="row-meta">
-                {relativeDay(e.spent_on)}, {e.paid_by === data.me ? "you" : e.paid_by_name} paid
-                {e.shares.length < data.members.length && `, split between ${andList(e.shares.map((s) => (s.member_id === data.me ? "you" : s.name)))}`}
+    <>
+      <section className="section panel" aria-labelledby="recent-exp">
+        <h2 className="section-title" id="recent-exp">Expenses</h2>
+        {data.expenses.length === 0 && <p className="empty">No expenses yet.</p>}
+        <ul className="rows">
+          {data.expenses.map((e) => (
+            <li className="row" key={`e${e.id}`}>
+              <span className="row-main">
+                <span className="row-title">{e.description}</span>
+                <span className="row-meta">
+                  {relativeDay(e.spent_on)}, {e.paid_by === data.me ? "you" : e.paid_by_name} paid
+                  {e.shares.length < data.members.length && `, split between ${andList(e.shares.map((s) => (s.member_id === data.me ? "you" : s.name)))}`}
+                </span>
               </span>
-            </span>
-            <span className="money-amount-cell">{fmt(e.amount_cents)}</span>
-            {e.can_delete && (
-              <button className="btn btn-quiet btn-small" onClick={() => void remove(e.id, e.description)}
-                      aria-label={`Delete ${e.description}`}>Delete</button>
-            )}
-          </li>
-        ))}
-        {data.payments.map((p) => (
-          <li className="row" key={`p${p.id}`}>
-            <span className="row-main">
-              <span className="row-title">{p.from_name} paid {p.to_name}</span>
-              <span className="row-meta">{relativeDay(p.settled_on)}</span>
-            </span>
-            <span className="money-amount-cell">{fmt(p.cents)}</span>
-          </li>
-        ))}
-      </ul>
-    </section>
+              <span className="money-amount-cell">{fmt(e.amount_cents)}</span>
+              {e.can_delete && (
+                <button className="btn btn-quiet btn-small" onClick={() => void remove(e.id, e.description)}
+                        aria-label={`Delete ${e.description}`}>Delete</button>
+              )}
+            </li>
+          ))}
+        </ul>
+      </section>
+      {data.payments.length > 0 && (
+        <section className="section panel" aria-labelledby="payments">
+          <h2 className="section-title" id="payments">Payments</h2>
+          <ul className="rows">
+            {data.payments.map((p) => (
+              <li className="row payment" key={`p${p.id}`}>
+                <span className="row-main">
+                  <span className="row-title">
+                    {p.from_name === data.members.find((m) => m.id === data.me)?.name ? "You" : p.from_name}
+                    {" paid "}
+                    {p.to_name === data.members.find((m) => m.id === data.me)?.name ? "you" : p.to_name}
+                  </span>
+                  <span className="row-meta">{relativeDay(p.settled_on)}</span>
+                </span>
+                <span className="money-amount-cell payment-amount">{fmt(p.cents)}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
   );
 }

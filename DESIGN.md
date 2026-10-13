@@ -294,7 +294,7 @@ A screen title set as a Cairo street sign.
 ### Briefing Plate (signature)
 The morning briefing on Today: Abdo speaking, so it sits on enamel.
 - **Shape:** a full-width plate, 18px corners, with the 5px and 7px ring, and 18px 20px 16px padding.
-- **Content, top to bottom:** the date line at label size; the Arabic greeting as a headline; a 25%-white rule; the weather row (a 34px gold stroke icon, a numeral temperature with a raised half-size degree sign, the sky in bold, and a feels-like and high/low line); a 25%-white rule; then a sideways-scrolling hourly strip (hour at micro size, a 20px gold icon, temperature in the sign face, rain chance in pale blue only when it's 30% or more).
+- **Content, top to bottom:** the date line at label size; the Arabic greeting as a headline (the suite's own phrases, changing with the time of day and the weekend; a phrase's tail, such as "حسب التوقيت المحلي", sits beneath it at lead size, and "يا <name>" is added only to short phrases); a 25%-white rule; the weather row (a 34px gold stroke icon, a numeral temperature with a raised half-size degree sign, the sky in bold, and a feels-like and high/low line); a 25%-white rule; then a sideways-scrolling hourly strip (hour at micro size, a 20px gold icon, temperature in the sign face, rain chance in pale blue only when it's 30% or more).
 - **Loading:** a blank plate at 236px tall and 60% opacity, so the layout doesn't jump when the data arrives.
 - The money balance on the Money screen is the same plate (`money-summary`), carrying a numeral amount and transfer rows separated by 25%-white rules.
 
@@ -302,8 +302,14 @@ The morning briefing on Today: Abdo speaking, so it sits on enamel.
 The rest of today as stops on a single line (see Layout, The Route Grammar).
 - **Stops:** a time in the time face, then a title in the row-title style, with an optional meta line beneath and an optional small quiet button on the right.
 - **States:** past stops fade to 50% opacity (earlier ones fold behind an "Earlier today (n)" link); the next prayer turns gold (filled marker, time and title); exam owners are in bold gold; sunrise is in Dusk Text.
-- **Bus stop:** the whole row is a toggle that expands the upcoming trips. A chevron rotates 90° over 0.2s with an `cubic-bezier(0.16, 1, 0.3, 1)` ease-out, and a gold "in N min" countdown sits beside the route name.
+- **No buses on the line:** buses have their own screen (Buses Board), reached from the bus button beside Today's sign. The line only carries what is actually on your day.
 - **Now marker:** a gold tick with a "Now h:mm am" label in the sign face. When Today opens, the tick draws across the line from the left (0.6s, same ease-out), and only once. With reduced motion, it doesn't animate.
+
+### Buses Board
+The Buses screen (`/buses`): each saved trip is a panel; each departure is a row led by a **route plate** (the route number on a small enamel plate, 40px tall, 10px corners, a 3px and 4.5px ring, the number in the sign face at lead size), the headsign as the title, the boarding stop, any "stay on as it becomes the N" change and the arrival in the meta line, and on the right a gold "N min" in the sign face over the clock time. A closing note says whether times are live or scheduled.
+
+### Panels
+Sections below Today's line (Around, Coming up), every Lists section, and Money's Expenses and Payments sit on their own block: Night Surface fill, a hairline border, 16px corners, 12px 16px 14px padding, 16px apart. The last row in a panel has no divider; fields inside a panel use the Night Navy fill so they read as inputs. A panel is never nested in another panel.
 
 ### Buttons
 - **Shape:** 12px corners, 44px tall, 18px side padding, weight 600. The small size is 34px tall, 10px corners, label size.
@@ -320,7 +326,9 @@ The rest of today as stops on a single line (see Layout, The Route Grammar).
 - **Tag:** a small pill filled with Hairline, at label size.
 
 ### Rows and Sections
-- **Section:** a title-style heading, an optional note in Dusk Text at label size, then rows.
+- **Section:** a title-style heading, an optional note in Dusk Text at label size, then rows. Sections that list different kinds of things sit on panels (above).
+- **Kind icon:** Coming up rows lead with a 20px stroke icon for what they are: a pencil for an exam (gold), a bell for a reminder, a calendar for an event (Dusk Text).
+- **Payment row:** "You paid Sam" with the amount in Dusk Text, so a transfer never reads like a purchase.
 - **Row:** at least 52px tall, 12px gap between parts, a hairline divider below, the title in body style, the meta line beneath in Dusk Text at label size. Both lines read in their own direction and are pinned left.
 - **Empty state:** a single line in Dusk Text.
 

@@ -28,6 +28,12 @@ export function clock(timestamp: string): string {
   return new Date(timestamp).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
 }
 
+/** "4:31 pm", "8 am" on the hour: the app's one short clock format. */
+export function shortClock(timestamp: string | number): string {
+  const [t, ap] = clock(new Date(timestamp).toISOString()).split(" ");
+  return `${t.replace(/:00$/, "")} ${(ap ?? "").replace(/\./g, "")}`.trim();
+}
+
 export function todayISO(): string {
   return localISO(new Date());
 }

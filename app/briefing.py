@@ -4,8 +4,10 @@ Lines only appear when there's something to say, and a source that fails is left
 (or says it couldn't check) rather than faked: no invented weather, and a calendar that
 couldn't be read never reads as "nothing today".
 """
+import asyncio
 import logging
 import time as _time
+import zlib
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -143,12 +145,35 @@ async def money_for(member_id: int) -> dict:
     return {"net": net.get(member_id, 0), "transfers": transfers}
 
 
-def greeting(local: datetime) -> str:
-    if local.hour < 12:
-        return "صباح الخير"
-    if local.hour < 18:
-        return "أهلاً"
-    return "مساء الخير"
+# Greetings, the suite's own. (main, tail, takes the name). The tail is part of the
+# phrase; the app sets it smaller under the main line. A phrase that's complete on its own
+# (a rhyme, or one that already addresses you) never gets "يا <name>".
+_WEEKDAY_MORNING = [("صباح الفل", "", True), ("صباح الورد", "", True), ("صحي النوم", "", True)]
+_WEEKDAY_EVENING = [("مساء الفل", "", True), ("مساء العسل", "", True), ("مسا مسا", "", False)]
+_WEEKEND_MORNING = [("صباح الورد والتجلي", "حسب التوقيت المحلي", False),
+                    ("صباح الفل", "يا سيد الكل", False)]
+_WEEKEND_EVENING = [("مساء العسل", "والدلع والكسل", False)]
+_WEEKEND_NIGHT = _WEEKEND_EVENING + [("الشمس نزلت", "وانت لسا منور", False)]   # after sunset only
+
+
+def greeting(local: datetime, member_id: int = 0) -> dict:
+    """{"main", "tail", "named"} for this moment. Morning is 4:00-11:59; Saturday and Sunday
+    get the weekend phrases. The pick is fixed for the person, day and half of the day, so
+    it doesn't change on every refresh."""
+    morning = 4 <= local.hour < 12
+    weekend = local.weekday() >= 5
+    if morning:
+        pool = _WEEKEND_MORNING if weekend else _WEEKDAY_MORNING
+    elif weekend:
+        pool = _WEEKEND_NIGHT if (local.hour >= 18 or local.hour < 4) else _WEEKEND_EVENING
+    else:
+        pool = _WEEKDAY_EVENING
+    main, tail, named = pool[zlib.crc32(f"{local.date()}|{morning}|{member_id}".encode()) % len(pool)]
+    return {"main": main, "tail": tail, "named": named}
+
+
+def greeting_text(g: dict, name: str) -> str:
+    return " ".join(x for x in (g["main"], g["tail"], f"يا {name}" if g["named"] else "") if x)
 
 
 async def gather(member, now: datetime | None = None) -> dict:
@@ -160,15 +185,25 @@ async def gather(member, now: datetime | None = None) -> dict:
     local = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(loc.tz) if loc else tz)
     today = local.date()
 
-    events, calendar_ok = [], True
-    if calendar_svc.is_configured():
+    # The two slow outside calls (Google Calendar, the weather) run while the database
+    # work happens, instead of one after another.
+    async def todays_events():
+        if not calendar_svc.is_configured():
+            return [], True
         try:
-            for e in await read_calendar(1):
-                w = event_when(e)
-                if w["date"] == today.isoformat():
-                    events.append({"summary": e["summary"], "time": w["time"]})
+            # The same 7-day window the Today screen reads, so one cached read serves both.
+            evs = await read_calendar(7, cached=True)
         except calendar_svc.CalendarReadError:
-            calendar_ok = False
+            return [], False
+        out = []
+        for e in evs:
+            w = event_when(e)
+            if w["date"] == today.isoformat():
+                out.append({"summary": e["summary"], "time": w["time"]})
+        return out, True
+
+    calendar_task = asyncio.create_task(todays_events())
+    weather_task = asyncio.create_task(weather(loc))
 
     from app import timetable
     day_start = datetime.combine(today, datetime.min.time(), tz)
@@ -205,13 +240,19 @@ async def gather(member, now: datetime | None = None) -> dict:
         prayers = [{"name": prayer.NAMES[n][1], "label": prayer.clock12(times[n])}
                    for n in prayer.PRAYERS if times[n] > local]
 
+    events, calendar_ok = await calendar_task
+    g = greeting(local, member["id"])
+    name = member["arabic_name"] or member["name"]
     return {
-        "greeting": greeting(local),
-        "name": member["arabic_name"] or member["name"],
+        "greeting": greeting_text(g, name),
+        "greeting_main": g["main"],
+        "greeting_tail": g["tail"],
+        "greeting_named": g["named"],
+        "name": name,
         "date": today.isoformat(),
         "day": local.strftime("%A %d %B"),
         "place": None if loc is None or loc.is_home else loc.label,
-        "weather": await weather(loc),
+        "weather": await weather_task,
         "events": events,
         "calendar_ok": calendar_ok,
         "classes": [{"what": c.what, "from": c.start.strftime("%H:%M"), "to": c.end.strftime("%H:%M")}
@@ -272,7 +313,7 @@ def render_text(b: dict) -> tuple[str, str]:
         lines.append(f"{s['name']}: {s['text']}" + (f" until {s['until']}" if s["until"] else ""))
     if b["prayers"]:
         lines.append("Prayers: " + ", ".join(f"{p['name']} {p['label']}" for p in b["prayers"]))
-    title = f"{b['greeting']} يا {b['name']}" + (" ☀️" if b["greeting"] == "صباح الخير" else "")
+    title = b["greeting"] + (" ☀️" if b["greeting_main"].startswith("صباح") else "")
     return title, "\n".join(lines) if lines else "Nothing on today. Enjoy it."
 
 
