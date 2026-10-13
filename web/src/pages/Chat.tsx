@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { BidiText, dirOf } from "../lib/bidi";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type ChatMessage, type Member } from "../api";
 import { Sign } from "../components/Sign";
@@ -199,7 +200,7 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
             <div key={m.id} style={{ display: "contents" }}>
               {mark}
               <div className={`msg ${mine ? "mine" : "abdo"}`}>
-                <div className={`bubble${mine ? "" : " plate"}`} dir="auto">{m.content}</div>
+                <div className={`bubble${mine ? "" : " plate"}`} dir={dirOf(m.content)}><BidiText text={m.content} /></div>
                 <div className="msg-meta">
                   {m.channel === "telegram" && <><Icon name="telegram" /><span>Telegram</span></>}
                   {m.modality === "voice" && mine && <Icon name="mic" label="Voice" />}
@@ -220,8 +221,8 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
         {pending && (
           <>
             <div className="msg mine">
-              <div className="bubble" dir="auto">
-                {pending.kind === "text" ? pending.text : <span className="msg-meta"><Icon name="mic" /> Voice message</span>}
+              <div className="bubble" dir={pending.kind === "text" ? dirOf(pending.text) : "ltr"}>
+                {pending.kind === "text" ? <BidiText text={pending.text} /> : <span className="msg-meta"><Icon name="mic" /> Voice message</span>}
               </div>
             </div>
             <div className="msg abdo" aria-label="Abdo is replying">

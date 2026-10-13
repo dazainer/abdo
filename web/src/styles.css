@@ -9,18 +9,20 @@
   --white: #f6f7f4;         /* enamel white */
   --ink: #1a2233;           /* blue-black text */
   --ink-soft: #536079;
-  --snow: #e4e8ee;          /* Waterloo snow: surfaces, hairlines */
+  --snow: #22344f;          /* hairlines, quiet fills */
   --gold: #f2b705;          /* the mic, focus, active tab */
   --danger: #b3261e;
   --ok: #2f7d4f;
 
-  --bg: var(--white);
-  --surface: #ffffff;
-  --line: var(--snow);
-  --text: var(--ink);
-  --text-soft: var(--ink-soft);
-  --plate: var(--blue);
+  /* Dark only (for now): navy night, enamel plates glowing on it. */
+  --bg: #0e1a2b;
+  --surface: #16263d;
+  --line: #22344f;
+  --text: #eef1f5;
+  --text-soft: #9fb0c8;
+  --plate: #2a62a8;
   --plate-text: var(--white);
+  --plate-rule: rgba(246, 247, 244, 0.25);
 
   --font-sign: "Alexandria", "IBM Plex Sans Arabic", system-ui, sans-serif;
   --font-body: "IBM Plex Sans Arabic", system-ui, sans-serif;
@@ -36,21 +38,9 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
 
-  color-scheme: light;
+  color-scheme: dark;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1a2b;
-    --surface: #16263d;
-    --line: #22344f;
-    --text: #eef1f5;
-    --text-soft: #9fb0c8;
-    --plate: #2a62a8;
-    --snow: #22344f;
-    color-scheme: dark;
-  }
-}
 
 * { box-sizing: border-box; }
 
@@ -166,7 +156,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 }
 .tab svg { width: 24px; height: 24px; }
 .tab.active { color: var(--text); }
-.tab.active svg { color: var(--plate); }
+.tab.active svg { color: var(--gold); }
 .tab.active::after {
   content: "";
   width: 18px; height: 3px; border-radius: 2px;
@@ -199,7 +189,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 }
 .row-main { flex: 1; min-width: 0; }
 .row-title { display: block; overflow-wrap: anywhere; unicode-bidi: plaintext; text-align: left; }
-.row-meta { display: block; color: var(--text-soft); font-size: var(--t-small); unicode-bidi: plaintext; text-align: left; }
+.row-meta { display: block; color: var(--text-soft); font-size: var(--t-small); unicode-bidi: plaintext; text-align: left; text-wrap: pretty; }
 
 .empty { color: var(--text-soft); padding: 14px 0; }
 
@@ -242,7 +232,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .check {
   width: 26px; height: 26px; flex: 0 0 26px;
   border-radius: 50%;
-  border: 2px solid var(--ink-soft);
+  border: 2px solid var(--text-soft);
   background: transparent;
   cursor: pointer;
   padding: 0;
@@ -265,7 +255,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
   border: 1px solid var(--line);
   font-size: var(--t-small);
 }
-.notice-error { border-color: var(--danger); color: var(--danger); }
+.notice-error { border-color: #ff8a80; color: #ff8a80; }
 
 .toast {
   position: fixed;
@@ -345,7 +335,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
   border-radius: 16px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  unicode-bidi: plaintext;
 }
 .mine .bubble {
   background: var(--surface);
@@ -479,21 +468,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .briefing-sky-main { font-size: var(--t-body); font-weight: 600; opacity: 1; }
 .briefing-sky-main::first-letter { text-transform: uppercase; }
 
-.briefing-rows { margin: 0; }
-.briefing-row {
-  display: grid;
-  grid-template-columns: 86px 1fr;
-  gap: 10px;
-  padding: 10px 0;
-  border-top: 1px solid rgba(246, 247, 244, 0.25);
-}
-.briefing-row dt { color: var(--gold); font-weight: 600; font-size: var(--t-small); padding-top: 2px; }
-.briefing-row dd { margin: 0; }
-.briefing-line { display: block; }
-.briefing-time { font-variant-numeric: tabular-nums; margin-inline-end: 8px; opacity: 0.85; }
-.briefing-link { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
-.briefing-quiet { margin: 6px 0 0; padding-top: 10px; border-top: 1px solid rgba(246, 247, 244, 0.25); opacity: 0.9; }
-
 /* ---- money: the balance is the screen's enamel plate ------------------------------- */
 
 .money-summary {
@@ -540,13 +514,12 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .term-row .field { min-width: 0; }
 .steps li { margin-bottom: 4px; }
 .paste { min-height: 160px; resize: vertical; font-size: var(--t-small); line-height: 1.4; }
-.free-line { margin: 0; font-family: var(--font-sign); font-size: var(--t-lead); font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* ---- fridge + polls --------------------------------------------------------------- */
 
 .expiry { font-weight: 500; }
-.expiry-soon { color: var(--plate); }
-.expiry-expired { color: var(--danger); }
+.expiry-soon { color: var(--gold); }
+.expiry-expired { color: #ff8a80; }
 
 .poll { padding: 10px 0 14px; border-bottom: 1px solid var(--line); }
 .poll-q { margin: 0; font-family: var(--font-sign); font-weight: 600; font-size: var(--t-lead); unicode-bidi: plaintext; text-align: left; }
@@ -567,32 +540,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .poll-label, .poll-count { position: relative; z-index: 1; unicode-bidi: plaintext; }
 .poll-count { font-weight: 600; font-variant-numeric: tabular-nums; }
 .poll-voters { display: block; margin: 2px 4px 0; }
-
-/* ---- prayer times: a small enamel timetable, the next prayer lit in gold ---------- */
-
-.prayers {
-  list-style: none; margin: 4px 0 0; padding: 0;
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
-}
-.prayer {
-  display: flex; flex-direction: column; align-items: center;
-  padding: 10px 4px 9px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
-  line-height: 1.25;
-}
-.prayer-ar { font-family: var(--font-sign); font-weight: 700; font-size: var(--t-lead); line-height: 1.5; }
-.prayer-en { font-size: var(--t-small); color: var(--text-soft); }
-.prayer-time { font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
-.prayer.sunrise { opacity: 0.7; }
-.prayer.next {
-  background: var(--plate);
-  color: var(--plate-text);
-  border-color: var(--plate);
-  box-shadow: inset 0 0 0 3px var(--plate), inset 0 0 0 4.5px var(--gold);
-}
-.prayer.next .prayer-en { color: inherit; opacity: 0.85; }
 
 /* ---- settings ---------------------------------------------------------------- */
 
@@ -621,12 +568,227 @@ button, input, textarea, select { font: inherit; color: inherit; }
   .switch::after { transition: none; }
 }
 
-/* Buses: a closed section until tapped (nothing is fetched before that). */
-details > summary.section-title { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
-details > summary.section-title::-webkit-details-marker { display: none; }
-details > summary.section-title::after {
-  content: ""; width: 8px; height: 8px; margin-top: -3px;
-  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg);
+/* ---- browser surfaces, themed ------------------------------------------------- */
+
+::selection { background: rgba(242, 183, 5, 0.35); }
+input, textarea { caret-color: var(--gold); }
+input[type="checkbox"] { accent-color: var(--plate); }
+
+/* ---- shared bits ------------------------------------------------------------- */
+
+.section-action { margin-top: 10px; }
+.stack-form { display: grid; gap: 8px; margin-top: 10px; }
+.stack-form .inline-form { margin: 0; }
+.inline-form .field-kind { flex: 0 0 116px; }
+.bidi-line { unicode-bidi: isolate; min-height: 1.5em; }
+
+/* ---- Today: the briefing plate's hourly strip ---------------------------------- */
+
+.briefing-loading { min-height: 236px; opacity: 0.6; }
+.hours {
+  list-style: none;
+  margin: 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--plate-rule);
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(38px, 1fr);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, #000 88%, transparent);
+          mask-image: linear-gradient(to right, #000 88%, transparent);
 }
-details[open] > summary.section-title::after { transform: rotate(-135deg); margin-top: 3px; }
-.bus-in { font-family: var(--font-sign); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hours::-webkit-scrollbar { display: none; }
+.hour { display: flex; flex-direction: column; align-items: center; gap: 3px; font-variant-numeric: tabular-nums; }
+.hour-at { font-size: 0.6875rem; opacity: 0.8; white-space: nowrap; }
+.hour svg { width: 20px; height: 20px; color: var(--gold); }
+.hour-temp { font-family: var(--font-sign); font-weight: 600; font-size: var(--t-small); }
+.hour-rain { font-size: 0.6875rem; color: #bcd3f2; line-height: 1; }
+
+/* ---- Today: what needs you ------------------------------------------------------- */
+
+.needs {
+  display: flex;
+  gap: 8px;
+  margin: 12px -16px 0;
+  padding: 0 16px 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.needs::-webkit-scrollbar { display: none; }
+.needs {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+          mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.need {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--gold);
+  border-radius: 999px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: var(--t-small);
+  font-weight: 500;
+  white-space: nowrap;
+  unicode-bidi: plaintext;
+}
+.need:active { background: rgba(242, 183, 5, 0.14); }
+
+/* ---- Today: the day as a route line ---------------------------------------------- */
+/* An enamel-blue line down the left; each thing today is a stop on it. Prayer stops
+   are gold rings (the next one filled), bus stops are square like a bus-stop sign. */
+
+.line {
+  position: relative;
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0 0 0 30px;
+}
+.line::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 12px;
+  bottom: 12px;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--plate);
+}
+.stop {
+  position: relative;
+  display: grid;
+  grid-template-columns: 62px 1fr auto;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 48px;
+  padding: 6px 0;
+}
+.stop::before {
+  content: "";
+  position: absolute;
+  left: -26px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 3px solid var(--white);
+  box-sizing: border-box;
+}
+.stop-time {
+  font-family: var(--font-sign);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.stop-time small { font-size: 0.6875rem; font-weight: 500; color: var(--text-soft); }
+.stop-main { min-width: 0; }
+.stop-ar { font-family: var(--font-sign); font-weight: 600; }
+.stop-en { color: var(--text-soft); font-size: var(--t-small); }
+.stop-next .stop-en { color: inherit; }
+
+.stop-prayer::before { border-color: var(--gold); }
+.stop-next::before { background: var(--gold); }
+.stop-next .stop-time, .stop-next .row-title { color: var(--gold); }
+.stop-sunrise .row-title { color: var(--text-soft); }
+.stop-sunrise::before { border-width: 2px; }
+.stop-exam .row-title strong { color: var(--gold); font-weight: 600; }
+.stop-past { opacity: 0.5; }
+.stop-fold::before, .stop-end::before { display: none; }
+.stop-fold { min-height: 36px; }
+.stop-fold .btn-link { color: var(--text-soft); font-size: var(--t-small); justify-self: start; }
+
+.stop-bus::before { border-radius: 3px; border-color: var(--white); background: var(--plate); }
+.stop-toggle {
+  display: block; width: 100%;
+  padding: 0; border: 0; background: none;
+  text-align: left; cursor: pointer;
+}
+.bus-trips { list-style: none; margin: 8px 0 2px; padding: 0; display: grid; gap: 8px; }
+.bus-trip-name { display: block; font-weight: 600; font-size: var(--t-small); }
+
+.now-mark {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+}
+.now-mark::before {
+  content: "";
+  position: absolute;
+  left: -28px;
+  top: 50%;
+  width: 18px;
+  height: 4px;
+  margin-top: -2px;
+  border-radius: 2px;
+  background: var(--gold);
+}
+.now-label { color: var(--gold); font-family: var(--font-sign); font-weight: 600; font-size: var(--t-small); }
+.now-label small { font-weight: 500; }
+
+/* ---- Today: around + coming up ---------------------------------------------------- */
+
+.free { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 4px; }
+.free-label { color: var(--text-soft); font-size: var(--t-small); }
+.free-line { margin: 0; font-family: var(--font-sign); font-size: var(--t-lead); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.up-day + .up-day { margin-top: 6px; }
+.up-date { margin: 10px 0 0; font-size: var(--t-small); font-weight: 600; color: var(--text-soft); }
+.up-time { flex: 0 0 72px; font-family: var(--font-sign); font-weight: 500; font-variant-numeric: tabular-nums; color: var(--text-soft); font-size: var(--t-small); white-space: nowrap; }
+.up-time small { font-size: 0.6875rem; }
+
+/* ---- Lists: jump row ------------------------------------------------------------- */
+
+.jump { display: flex; gap: 6px; margin: 8px -16px 0; padding: 0 16px; overflow-x: auto; scrollbar-width: none; }
+.jump::-webkit-scrollbar { display: none; }
+.jump-link {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 38px; padding: 0 14px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface);
+  font-size: var(--t-small); font-weight: 600;
+  cursor: pointer;
+}
+.jump-n {
+  min-width: 20px; padding: 0 6px;
+  border-radius: 999px;
+  background: var(--plate); color: var(--plate-text);
+  font-size: 0.6875rem; line-height: 20px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.section-title[id] { scroll-margin-top: 12px; }
+
+.check-label { flex: 1; display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: var(--t-small); color: var(--text-soft); cursor: pointer; }
+.check-label input { width: 20px; height: 20px; margin: 0; }
+
+/* The bus stop's detail and expand control. */
+.bus-in { color: var(--gold); font-size: var(--t-small); font-weight: 600; margin-inline-start: 4px; white-space: nowrap; }
+.chev { display: inline-flex; vertical-align: middle; margin-inline-start: 4px; color: var(--text-soft); transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+.chev svg { width: 16px; height: 16px; }
+.stop-toggle[aria-expanded="true"] .chev { transform: rotate(90deg); }
+
+/* The line ends like a route: a terminus bar under the last stop. */
+.line::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  bottom: 10px;
+  width: 16px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--plate);
+}
+
+/* One authored moment: the gold "now" tick draws across the line when Today opens. */
+.now-mark::before { transform-origin: left center; animation: now-draw 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
+@keyframes now-draw { from { transform: scaleX(0); opacity: 0; } to { transform: scaleX(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .now-mark::before { animation: none; }
+  .chev { transition: none; }
+}

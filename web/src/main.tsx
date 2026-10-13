@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import "@fontsource/alexandria/500.css";
 import "@fontsource/alexandria/600.css";
 import "@fontsource/alexandria/700.css";
 import "@fontsource/ibm-plex-sans-arabic/400.css";

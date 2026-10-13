@@ -27,6 +27,10 @@ export function toCents(raw: string): number | null {
   return cents > 0 ? cents : null;
 }
 
+function andList(names: string[]): string {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 function errorText(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
 }
@@ -211,7 +215,7 @@ function Recent({ data, toast }: { data: MoneyOverview; toast: (msg: string) => 
               <span className="row-title">{e.description}</span>
               <span className="row-meta">
                 {relativeDay(e.spent_on)}, {e.paid_by === data.me ? "you" : e.paid_by_name} paid
-                {e.shares.length < data.members.length && `, for ${e.shares.map((s) => (s.member_id === data.me ? "you" : s.name)).join(", ")}`}
+                {e.shares.length < data.members.length && `, split between ${andList(e.shares.map((s) => (s.member_id === data.me ? "you" : s.name)))}`}
               </span>
             </span>
             <span className="money-amount-cell">{fmt(e.amount_cents)}</span>

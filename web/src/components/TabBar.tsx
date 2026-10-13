@@ -2,9 +2,9 @@ import { NavLink } from "react-router";
 import { Icon, type IconName } from "./Icon";
 
 const TABS: { to: string; label: string; icon: IconName }[] = [
-  { to: "/", label: "Chat", icon: "chat" },
+  { to: "/", label: "Today", icon: "calendar" },
+  { to: "/chat", label: "Chat", icon: "chat" },
   { to: "/lists", label: "Lists", icon: "list" },
-  { to: "/today", label: "Today", icon: "calendar" },
   { to: "/money", label: "Money", icon: "money" },
   { to: "/settings", label: "Settings", icon: "settings" },
 ];

@@ -124,6 +124,16 @@ export interface Today {
   reminders: Reminder[];
 }
 
+export type SkyKind = "clear" | "cloudy" | "fog" | "rain" | "snow" | "storm";
+
+export interface WeatherHour {
+  hour: string; // "15:00"
+  temp: number;
+  kind: SkyKind;
+  night: boolean;
+  rain: number; // % chance
+}
+
 export interface Briefing {
   greeting: string;
   name: string;
@@ -133,10 +143,12 @@ export interface Briefing {
     temp: number;
     feels: number;
     sky: string;
-    kind: "clear" | "cloudy" | "fog" | "rain" | "snow" | "storm";
+    kind: SkyKind;
     high: number;
     low: number;
     rain: number | null;
+    night: boolean;
+    hours: WeatherHour[];
   } | null;
   place: string | null;
   events: { summary: string; time: string | null }[];
@@ -190,6 +202,7 @@ export interface BusDeparture {
   delay_min: number;
   arrive: string | null;
   arrive_stop: string | null;
+  then_route: string | null;
 }
 
 export interface BusTrip {
@@ -306,7 +319,7 @@ export const api = {
 
   today: () => request<Today>("GET", "/api/today"),
   briefing: () => request<Briefing>("GET", "/api/briefing"),
-  buses: () => request<{ trips: BusTrip[] }>("GET", "/api/buses"),
+  buses: (homeOnly = false) => request<{ trips: BusTrip[] }>("GET", homeOnly ? "/api/buses?home=1" : "/api/buses"),
   setStatus: (text: string, until_time?: string, place?: string) =>
     request<{ ok: true; place: string | null }>("PUT", "/api/status", { text, until_time, place }),
   clearStatus: () => request<{ ok: true }>("DELETE", "/api/status"),

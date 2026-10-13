@@ -2739,6 +2739,8 @@ def test_web_buses():
         trips = r.json()["trips"]
         check("every saved trip, in order", r.status_code == 200 and [t["name"] for t in trips] == [t["name"] for t in BUS_TRIPS])
         check("trips with departures", [len(t["departures"]) for t in trips] == [2, 2, 1, 1])
+        home = c.get("/api/buses?home=1").json()["trips"]
+        check("home=1: only the stop by home", [t["name"] for t in home] == ["Home stop"])
         check("departures carry route, time, and arrival",
               all(t["ok"] for t in trips) and all({"route", "at", "in_min", "live", "arrive"} <= set(d) for t in trips for d in t["departures"]))
     finally:

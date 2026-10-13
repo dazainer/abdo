@@ -70,10 +70,12 @@ export function App() {
       <>
         <div className="shell">
           <Routes>
-            <Route path="/" element={<Chat me={member} toast={toast.show} />} />
+            <Route path="/" element={<Today me={member} toast={toast.show} />} />
+            <Route path="/chat" element={<Chat me={member} toast={toast.show} />} />
             <Route path="/lists" element={<Lists toast={toast.show} />} />
-            <Route path="/today" element={<Today me={member} toast={toast.show} />} />
-            <Route path="/calendar" element={<Navigate to="/today" replace />} />
+            {/* Notifications link to /today and /calendar; Today is the home screen now. */}
+            <Route path="/today" element={<Navigate to="/" replace />} />
+            <Route path="/calendar" element={<Navigate to="/" replace />} />
             <Route path="/money" element={<Money toast={toast.show} />} />
             <Route path="/schedule" element={<Schedule toast={toast.show} />} />
             <Route path="/settings" element={<Settings me={member} onLoggedOut={loggedOut} toast={toast.show} />} />

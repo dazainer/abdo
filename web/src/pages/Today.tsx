@@ -1,25 +1,32 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { api, ApiError, type CalendarEvent, type Member } from "../api";
+import { api, ApiError, type Briefing, type CalendarEvent, type Exam, type Member, type Reminder, type Today as TodayData } from "../api";
 import { Sign } from "../components/Sign";
-import { Icon } from "../components/Icon";
+import { Icon, type IconName } from "../components/Icon";
 import { fmt } from "./Money";
-import { clock, relativeDay, todayISO, dayOf } from "../lib/dates";
+import { clock, dayOf, relativeDay, todayISO } from "../lib/dates";
+
+// Today is the home screen: the briefing plate (greeting, weather, the next twelve hours),
+// the few things that need you, then the rest of the day as stops on one line, like a bus
+// route. Every fact appears once: what's on today is on the line, what's later is under
+// "Coming up".
 
 export function Today({ me, toast }: { me: Member; toast: (msg: string) => void }) {
+  const today = useQuery({ queryKey: ["today"], queryFn: api.today, refetchInterval: 60_000 });
+  const brief = useQuery({ queryKey: ["briefing"], queryFn: api.briefing, refetchInterval: 10 * 60_000 });
+  const exams = useQuery({ queryKey: ["exams"], queryFn: api.exams, refetchInterval: 5 * 60_000 });
+
   return (
     <div className="page">
       <header className="screen-head"><Sign ar="النهاردة" en="Today" /></header>
       <main className="screen">
-        <BriefingCard />
-        <FreeTogether />
-        <Around me={me} toast={toast} />
-        <Exams me={me} toast={toast} />
-        <Prayers />
-        <Buses />
-        <MyReminders toast={toast} />
-        <Week />
+        <BriefingPlate q={brief} />
+        {brief.data && <NeedsYou b={brief.data} />}
+        <DayLine me={me} today={today.data} brief={brief.data} exams={exams.data?.exams ?? []} toast={toast} />
+        {today.isError && <p className="notice notice-error">Couldn't load today.</p>}
+        <Around me={me} today={today.data} toast={toast} />
+        <ComingUp me={me} exams={exams.data?.exams ?? []} reminders={today.data?.reminders ?? []} toast={toast} />
       </main>
     </div>
   );
@@ -29,255 +36,292 @@ function errorText(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
 }
 
-function useToday() {
-  return useQuery({ queryKey: ["today"], queryFn: api.today, refetchInterval: 60_000 });
+// ---- the briefing plate ------------------------------------------------------------
+
+function skyIcon(kind: string, night: boolean): IconName {
+  if (kind === "clear" && night) return "moon";
+  return kind as IconName;
 }
 
-// The morning briefing, live: the same data the 8:00 notification is built from, laid out
-// as a card instead of a block of text. Statuses and prayer times have their own sections
-// right below, so the card leaves them out.
-function BriefingCard() {
-  const b = useQuery({ queryKey: ["briefing"], queryFn: api.briefing, refetchInterval: 10 * 60_000 });
-  if (b.isPending) return null;
-  if (b.isError || !b.data) {
-    return <p className="notice notice-error">Couldn't load your briefing.</p>;
-  }
-  const d = b.data;
-  const w = d.weather;
-  const forYou = [
-    ...d.waiting.map((x) => `${x}: waiting at the building`),
-    ...d.arriving.map((x) => `${x}: arriving today`),
-  ];
-  const quiet = !d.events.length && d.calendar_ok && !forYou.length && !d.groceries
-    && !d.classes.length && !d.my_exams.length && !d.others_exams.length && !d.fridge.length && !d.polls.length
-    && !d.money.transfers.some((t) => t.cents >= 100);
+/** "3 PM" on the first hour and at noon/midnight, bare "4" after: eight hours fit a phone. */
+function hourLabel(hhmm: string, first: boolean): string {
+  const h = Number(hhmm.slice(0, 2));
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return first || h % 12 === 0 ? `${h12} ${h < 12 ? "AM" : "PM"}` : String(h12);
+}
 
+function BriefingPlate({ q }: { q: { data?: Briefing; isPending: boolean; isError: boolean } }) {
+  if (q.isPending) return <section className="plate briefing briefing-loading" aria-busy="true" />;
+  if (q.isError || !q.data) return <p className="notice notice-error">Couldn't load your briefing.</p>;
+  const d = q.data;
+  const w = d.weather;
   return (
     <section className="plate briefing" aria-labelledby="briefing-title">
-      <div className="briefing-head">
-        <p className="briefing-day">{d.day}{d.place ? `, in ${d.place}` : ""}</p>
-        <h2 className="briefing-title" id="briefing-title" dir="rtl" lang="ar">
-          {d.greeting} يا {d.name}
-        </h2>
-      </div>
-
+      <p className="briefing-day">{d.day}{d.place ? `, in ${d.place}` : ""}</p>
+      <h2 className="briefing-title" id="briefing-title" dir="rtl" lang="ar">{d.greeting} يا {d.name}</h2>
       {w && (
-        <div className="briefing-weather">
-          <span className="briefing-icon"><Icon name={w.kind} label={w.sky || w.kind} /></span>
-          <span className="briefing-temp">{w.temp}<span className="briefing-deg">°</span></span>
-          <span className="briefing-sky">
-            <span className="briefing-sky-main">{w.sky}</span>
-            <span>
-              {w.feels !== w.temp ? `Feels like ${w.feels}°. ` : ""}High {w.high}°, low {w.low}°
-              {w.rain !== null ? `. ${w.rain}% chance of rain or snow` : ""}
+        <>
+          <div className="briefing-weather">
+            <span className="briefing-icon"><Icon name={skyIcon(w.kind, w.night)} label={w.sky || w.kind} /></span>
+            <span className="briefing-temp">{w.temp}<span className="briefing-deg">°</span></span>
+            <span className="briefing-sky">
+              <span className="briefing-sky-main">{w.sky}</span>
+              <span>
+                {w.feels !== w.temp ? `Feels like ${w.feels}°. ` : ""}High {w.high}°, low {w.low}°
+                {w.rain !== null ? `. ${w.rain}% chance of rain or snow` : ""}
+              </span>
             </span>
-          </span>
-        </div>
+          </div>
+          {w.hours.length > 0 && (
+            <ol className="hours" aria-label="Next 12 hours">
+              {w.hours.map((h, i) => (
+                <li key={h.hour} className="hour">
+                  <span className="hour-at">{hourLabel(h.hour, i === 0)}</span>
+                  <Icon name={skyIcon(h.kind, h.night)} label={h.kind} />
+                  <span className="hour-temp">{h.temp}°</span>
+                  <span className="hour-rain">{h.rain >= 30 ? `${h.rain}%` : " "}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </>
       )}
-
-      <dl className="briefing-rows">
-        {!d.calendar_ok ? (
-          <div className="briefing-row">
-            <dt>Today</dt>
-            <dd>Couldn't check the calendar.</dd>
-          </div>
-        ) : d.events.length > 0 && (
-          <div className="briefing-row">
-            <dt>Today</dt>
-            <dd>
-              {d.events.map((e, i) => (
-                <span key={i} className="briefing-line">
-                  {e.time && <span className="briefing-time">{e.time}</span>}
-                  <span className="row-title" style={{ display: "inline" }}>{e.summary}</span>
-                </span>
-              ))}
-            </dd>
-          </div>
-        )}
-        {d.classes.length > 0 && (
-          <div className="briefing-row">
-            <dt>Classes</dt>
-            <dd>
-              {d.classes.map((c, i) => (
-                <span key={i} className="briefing-line"><span className="briefing-time">{c.from}</span>{c.what}</span>
-              ))}
-            </dd>
-          </div>
-        )}
-        {(d.my_exams.length > 0 || d.others_exams.length > 0) && (
-          <div className="briefing-row">
-            <dt>Exams</dt>
-            <dd>
-              {d.my_exams.map((e, i) => (
-                <span key={`m${i}`} className="briefing-line">Your {e.course} {e.kind}: <strong>{e.when}</strong> ({e.day} {e.time})</span>
-              ))}
-              {d.others_exams.map((e, i) => (
-                <span key={`o${i}`} className="briefing-line">{e.name}: {e.course} {e.kind} {e.when} at {e.time}</span>
-              ))}
-            </dd>
-          </div>
-        )}
-        {forYou.length > 0 && (
-          <div className="briefing-row">
-            <dt>For you</dt>
-            <dd>{forYou.map((x) => <span key={x} className="briefing-line">{x}</span>)}</dd>
-          </div>
-        )}
-        {d.money.transfers.filter((t) => t.cents >= 100).length > 0 && (
-          <div className="briefing-row">
-            <dt>Money</dt>
-            <dd>
-              {d.money.transfers.filter((t) => t.cents >= 100).map((t) => (
-                <span key={t.name} className="briefing-line">
-                  {t.direction === "pay" ? `You owe ${t.name} ${fmt(t.cents)}` : `${t.name} owes you ${fmt(t.cents)}`}
-                </span>
-              ))}
-              <Link to="/money" className="briefing-link">Settle up</Link>
-            </dd>
-          </div>
-        )}
-        {d.fridge.length > 0 && (
-          <div className="briefing-row">
-            <dt>Fridge</dt>
-            <dd>
-              {d.fridge.map((f, i) => (
-                <span key={i} className="briefing-line">{f.item}: {f.state === "expired" ? f.label : `use ${f.label}`}</span>
-              ))}
-            </dd>
-          </div>
-        )}
-        {d.polls.length > 0 && (
-          <div className="briefing-row">
-            <dt>Polls</dt>
-            <dd>
-              {d.polls.map((q) => <span key={q.id} className="briefing-line">{q.question}</span>)}
-              <Link to="/lists" className="briefing-link">Vote</Link>
-            </dd>
-          </div>
-        )}
-        {d.groceries > 0 && (
-          <div className="briefing-row">
-            <dt>Groceries</dt>
-            <dd>
-              {d.groceries} on the list{" "}
-              <Link to="/lists" className="briefing-link">Open</Link>
-            </dd>
-          </div>
-        )}
-      </dl>
-      {quiet && <p className="briefing-quiet">Nothing else on today.</p>}
     </section>
   );
 }
 
-function FreeTogether() {
-  const today = useToday();
-  const f = today.data?.free;
-  if (!f) return null;
-  const windows = f.together.map((w) => `${w.from}–${w.to}`).join(", ");
-  const skip = [...f.away.map((n) => `${n} (away)`), ...f.no_timetable.filter((n) => !f.away.includes(n)).map((n) => `${n} (no classes added)`)];
+// ---- what needs you: one tap from each fact to where you act on it ------------------
+
+function NeedsYou({ b }: { b: Briefing }) {
+  const chips: { key: string; text: string; to: string }[] = [
+    ...b.waiting.map((x) => ({ key: `w-${x}`, text: `${x} is waiting at the building`, to: "/lists" })),
+    ...b.arriving.map((x) => ({ key: `a-${x}`, text: `${x} arrives today`, to: "/lists" })),
+    ...b.money.transfers.filter((t) => t.cents >= 100).map((t) => ({
+      key: `m-${t.name}`,
+      text: t.direction === "pay" ? `You owe ${t.name} ${fmt(t.cents)}` : `${t.name} owes you ${fmt(t.cents)}`,
+      to: "/money",
+    })),
+    ...b.fridge.map((f) => ({
+      key: `f-${f.item}`, text: f.state === "expired" ? `${f.item}: ${f.label}` : `${f.item}: use ${f.label}`, to: "/lists",
+    })),
+    ...b.polls.map((p) => ({ key: `p-${p.id}`, text: `Vote: ${p.question}`, to: "/lists" })),
+  ];
+  if (!chips.length) return null;
   return (
-    <section className="section" aria-labelledby="free">
-      <h2 className="section-title" id="free">Free together</h2>
-      <p className="free-line">{windows || "Not today."}</p>
-      {skip.length > 0 && <p className="section-note">Without {skip.join(", ")}</p>}
-    </section>
+    <nav className="needs" aria-label="Needs you">
+      {chips.map((c) => (
+        <Link key={c.key} to={c.to} className="need">{c.text.charAt(0).toUpperCase() + c.text.slice(1)}</Link>
+      ))}
+    </nav>
   );
 }
 
-const KIND_LABEL: Record<string, string> = { quiz: "quiz", midterm: "midterm", final: "final" };
+// ---- the day as a line --------------------------------------------------------------
 
-function Exams({ me, toast }: { me: Member; toast: (msg: string) => void }) {
+type Stop = {
+  key: string;
+  at: number | null;            // ms; null = all day
+  kind: "prayer" | "sunrise" | "class" | "event" | "exam" | "reminder";
+  title: ReactNode;
+  sub?: string;
+  next?: boolean;
+  action?: ReactNode;
+};
+
+function at(dateISO: string, hhmm: string): number {
+  const [y, m, d] = dateISO.split("-").map(Number);
+  const [h, min] = hhmm.split(":").map(Number);
+  return new Date(y, m - 1, d, h, min).getTime();
+}
+
+function timeParts(ms: number): { t: string; ap: string } {
+  const [t, ap] = clock(new Date(ms).toISOString()).split(" ");
+  return { t, ap: (ap ?? "").replace(/\./g, "") };
+}
+
+/** One clock format for the whole screen: "4:31 am", "8 am" on the hour. */
+function short(ms: number): string {
+  const { t, ap } = timeParts(ms);
+  return `${t.replace(/:00$/, "")} ${ap}`;
+}
+
+/** "08:00"-"18:00" today -> "8 am-6 pm" (hyphen: no dashes as separators). */
+function span(from: string, to: string): string {
+  const day = todayISO();
+  return `${short(at(day, from))}-${short(at(day, to))}`;
+}
+
+function DayLine({ me, today, brief, exams, toast }: {
+  me: Member;
+  today?: TodayData;
+  brief?: Briefing;
+  exams: Exam[];
+  toast: (msg: string) => void;
+}) {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["exams"], queryFn: api.exams, refetchInterval: 5 * 60_000 });
-  const [adding, setAdding] = useState(false);
-  const [course, setCourse] = useState("");
-  const [kind, setKind] = useState("midterm");
-  const [date, setDate] = useState("");
-  const [time, setTime] = useState("");
+  const [showEarlier, setShowEarlier] = useState(false);
+  const now = Date.now();
+  const day = todayISO();
 
-  async function add(e: FormEvent) {
-    e.preventDefault();
-    try {
-      await api.addExam({ course: course.trim(), kind, date, time });
-      setAdding(false);
-      setCourse("");
-      setDate("");
-      setTime("");
-      await qc.invalidateQueries({ queryKey: ["exams"] });
-    } catch (err) {
-      toast(errorText(err, "Couldn't add the exam."));
+  const stops = useMemo(() => {
+    async function cancelReminder(r: Reminder) {
+      try {
+        await api.cancelReminder(r.id);
+        await qc.invalidateQueries({ queryKey: ["today"] });
+      } catch (err) {
+        toast(errorText(err, "Couldn't cancel the reminder."));
+      }
     }
-  }
-
-  async function remove(id: number) {
-    try {
-      await api.deleteExam(id);
-      await qc.invalidateQueries({ queryKey: ["exams"] });
-    } catch (err) {
-      toast(errorText(err, "Couldn't remove it."));
+    const out: Stop[] = [];
+    for (const p of today?.prayers?.times ?? []) {
+      out.push({
+        key: `p-${p.name}`, at: new Date(p.at).getTime(), kind: p.name === "sunrise" ? "sunrise" : "prayer",
+        title: <span dir="ltr"><bdi lang="ar" className="stop-ar">{p.ar}</bdi> <span className="stop-en">{p.en}</span></span>,
+        next: p.name === today?.prayers?.next,
+      });
     }
-  }
+    for (const c of brief?.classes ?? []) {
+      out.push({ key: `c-${c.from}-${c.what}`, at: at(day, c.from), kind: "class", title: c.what, sub: `Until ${c.to}` });
+    }
+    for (const e of brief?.events ?? []) {
+      out.push({ key: `e-${e.summary}-${e.time}`, at: e.time ? at(day, e.time) : null, kind: "event", title: e.summary });
+    }
+    for (const x of exams.filter((x) => dayOf(x.starts_at) === day)) {
+      out.push({
+        key: `x-${x.id}`, at: new Date(x.starts_at).getTime(), kind: "exam",
+        title: <><strong>{x.member_id === me.id ? "Your" : `${x.name}:`}</strong> {x.course} {x.kind}</>,
+        sub: x.room ?? undefined,
+      });
+    }
+    for (const r of (today?.reminders ?? []).filter((r) => dayOf(r.due_at) === day)) {
+      out.push({
+        key: `r-${r.id}`, at: new Date(r.due_at).getTime(), kind: "reminder", title: r.text,
+        sub: r.set_by ? `Reminder from ${r.set_by}` : "Reminder",
+        action: <button className="btn btn-quiet btn-small" onClick={() => void cancelReminder(r)}>Cancel</button>,
+      });
+    }
+    return out.sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+  }, [today, brief, exams, day, me.id, qc, toast]);
 
-  const exams = q.data?.exams ?? [];
+  if (!today && !brief) return null;
+  const allDay = stops.filter((s) => s.at === null);
+  const earlier = stops.filter((s) => s.at !== null && s.at < now);
+  const later = stops.filter((s) => s.at !== null && s.at >= now);
+  const nowT = timeParts(now);
+
   return (
-    <section className="section" aria-labelledby="exams">
-      <h2 className="section-title" id="exams">Exams</h2>
-      {q.data && exams.length === 0 && !adding && <p className="empty">None coming up.</p>}
-      <ul className="rows">
-        {exams.map((x) => (
-          <li className="row" key={x.id}>
-            <span className="row-main">
-              <span className="row-title"><strong>{x.member_id === me.id ? "You" : x.name}</strong> {x.course} {KIND_LABEL[x.kind]}</span>
-              <span className="row-meta">{relativeDay(dayOf(x.starts_at))} at {clock(x.starts_at)}{x.room ? `, ${x.room}` : ""}</span>
-            </span>
-            {x.can_delete && <button className="btn btn-quiet btn-small" onClick={() => void remove(x.id)}>Remove</button>}
+    <section className="section" aria-labelledby="the-day">
+      <h2 className="visually-hidden" id="the-day">The rest of today</h2>
+      <ol className="line">
+        {allDay.map((s) => <StopRow key={s.key} s={s} />)}
+        {earlier.length > 0 && (
+          <li className="stop stop-fold">
+            <span className="stop-time" />
+            <button className="btn-link" onClick={() => setShowEarlier(!showEarlier)} aria-expanded={showEarlier}>
+              {showEarlier ? "Hide earlier" : `Earlier today (${earlier.length})`}
+            </button>
           </li>
-        ))}
-      </ul>
-      {adding ? (
-        <form onSubmit={add} style={{ display: "grid", gap: 8, marginTop: 10 }}>
-          <div className="inline-form" style={{ margin: 0 }}>
-            <input className="field" value={course} onChange={(e) => setCourse(e.target.value)} placeholder="Course"
-                   aria-label="Course" autoFocus maxLength={40} />
-            <select className="field field-narrow" value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Kind"
-                    style={{ flex: "0 0 112px" }}>
-              <option value="quiz">Quiz</option>
-              <option value="midterm">Midterm</option>
-              <option value="final">Final</option>
-            </select>
-          </div>
-          <div className="inline-form" style={{ margin: 0 }}>
-            <input className="field" type="date" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Date" />
-            <input className="field" type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Start time" />
-          </div>
-          <div className="inline-form" style={{ margin: 0 }}>
-            <button className="btn" disabled={!course.trim() || !date || !time}>Add exam</button>
-            <button type="button" className="btn btn-quiet" onClick={() => setAdding(false)}>Cancel</button>
-          </div>
-        </form>
-      ) : (
-        <button className="btn btn-quiet" style={{ marginTop: 10 }} onClick={() => setAdding(true)}>Add an exam</button>
-      )}
+        )}
+        {showEarlier && earlier.map((s) => <StopRow key={s.key} s={s} past />)}
+        <li className="now-mark">
+          <span className="now-label">Now {nowT.t} <small>{nowT.ap}</small></span>
+        </li>
+        <BusStop />
+        {later.map((s) => <StopRow key={s.key} s={s} />)}
+        {later.length === 0 && (
+          <li className="stop stop-end"><span className="stop-time" /><span className="row-meta">Nothing else today</span></li>
+        )}
+      </ol>
     </section>
   );
 }
+
+/** "4:09 pm", the am/pm set small. */
+function Time({ ms }: { ms: number | null }) {
+  if (ms === null) return <>All day</>;
+  const t = timeParts(ms);
+  return <>{t.t}<small> {t.ap}</small></>;
+}
+
+function StopRow({ s, past = false }: { s: Stop; past?: boolean }) {
+  return (
+    <li className={`stop stop-${s.kind}${s.next ? " stop-next" : ""}${past ? " stop-past" : ""}`}>
+      <span className="stop-time"><Time ms={s.at} /></span>
+      <span className="stop-main">
+        <span className="row-title">{s.title}</span>
+        {s.sub && <span className="row-meta">{s.sub}</span>}
+      </span>
+      {s.action}
+    </li>
+  );
+}
+
+// The next buses from the stop by home, as a stop right after "now". Tap for every trip.
+function BusStop() {
+  const [open, setOpen] = useState(false);
+  const home = useQuery({ queryKey: ["buses", "home"], queryFn: () => api.buses(true), refetchInterval: 60_000, retry: 0 });
+  const all = useQuery({ queryKey: ["buses"], queryFn: () => api.buses(), enabled: open, refetchInterval: open ? 60_000 : false });
+  const trip = home.data?.trips[0];
+  const deps = trip?.ok ? trip.departures : [];
+  if (!deps.length) return null;
+  const live = deps.some((d) => d.live);
+  return (
+    <li className="stop stop-bus">
+      <span className="stop-time"><Time ms={new Date(deps[0].at).getTime()} /></span>
+      <span className="stop-main">
+        <button className="stop-toggle" onClick={() => setOpen(!open)} aria-expanded={open}
+                aria-label={`${deps[0].route} to ${deps[0].headsign}, in ${deps[0].in_min} minutes. ${open ? "Hide" : "Show"} every saved trip`}>
+          <span className="row-title">
+            {deps[0].route} to {deps[0].headsign} <span className="bus-in">in {deps[0].in_min} min</span>
+            <span className="chev"><Icon name="chevron" /></span>
+          </span>
+          <span className="row-meta">
+            {[...deps.slice(1).map((d) => `${d.route} in ${d.in_min} min`), live ? "" : "scheduled, not live"]
+              .filter(Boolean).join(", ")}
+          </span>
+        </button>
+        {open && (
+          <ul className="bus-trips">
+            {all.isPending && <li className="row-meta">Checking GRT…</li>}
+            {all.isError && <li className="row-meta">Couldn't reach GRT.</li>}
+            {all.data?.trips.filter((t) => t.departures.length || !t.ok).map((t) => (
+              <li key={t.name}>
+                <span className="bus-trip-name">{t.name}</span>
+                <span className="row-meta">
+                  {!t.ok ? "Couldn't reach GRT" : t.departures.map((d) =>
+                    `${d.route}${d.then_route ? ` (then ${d.then_route})` : ""} at ${clock(d.at)}`).join(", ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </span>
+    </li>
+  );
+}
+
+// ---- around: statuses and free time ----------------------------------------------
 
 function untilLabel(iso: string | null): string {
   if (!iso) return "";
-  return ` until ${relativeDay(dayOf(iso)) === "Today" ? "" : relativeDay(dayOf(iso)) + " "}${clock(iso)}`;
+  const day = relativeDay(dayOf(iso));
+  return `Until ${day === "Today" ? "" : `${day} `}${short(new Date(iso).getTime())}`;
 }
 
-function Around({ me, toast }: { me: Member; toast: (msg: string) => void }) {
+function Around({ me, today, toast }: { me: Member; today?: TodayData; toast: (msg: string) => void }) {
   const qc = useQueryClient();
-  const today = useToday();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
   const [until, setUntil] = useState("");
   const [place, setPlace] = useState("");
+  if (!today) return null;
 
-  const statuses = today.data?.statuses ?? [];
+  const statuses = today.statuses;
   const mine = statuses.find((s) => s.member_id === me.id);
+  const f = today.free;
+  const windows = f.together.map((w) => span(w.from, w.to)).join(", ");
+  const skip = [...f.away.map((n) => `${n} (away)`),
+    ...f.no_timetable.filter((n) => !f.away.includes(n)).map((n) => `${n} (no classes added)`)];
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -286,9 +330,7 @@ function Around({ me, toast }: { me: Member; toast: (msg: string) => void }) {
       const res = await api.setStatus(text.trim(), until || undefined, place.trim() || undefined);
       if (res.place) toast(`Travel mode: ${res.place}`);
       setEditing(false);
-      setText("");
-      setUntil("");
-      setPlace("");
+      setText(""); setUntil(""); setPlace("");
       await qc.invalidateQueries({ queryKey: ["today"] });
     } catch (err) {
       toast(errorText(err, "Couldn't set your status. Try again."));
@@ -307,38 +349,37 @@ function Around({ me, toast }: { me: Member; toast: (msg: string) => void }) {
   return (
     <section className="section" aria-labelledby="around">
       <h2 className="section-title" id="around">Around</h2>
-      {today.isError && <p className="notice notice-error">Couldn't load today.</p>}
-      {today.data && statuses.length === 0 && !editing && (
-        <p className="empty">No statuses.</p>
-      )}
+      <p className="free">
+        <span className="free-label">Free together</span>
+        <span className="free-line">{windows || "Not today"}</span>
+      </p>
+      {skip.length > 0 && <p className="section-note">Without {skip.join(", ")}</p>}
       <ul className="rows">
         {statuses.map((s) => (
           <li className="row" key={s.member_id}>
             <span className="row-main">
-              <span className="row-title"><strong>{s.name}</strong> {s.text}{s.place ? ` (in ${s.place})` : ""}</span>
-              {s.until && <span className="row-meta">{untilLabel(s.until).trim()}</span>}
+              <span className="row-title"><strong>{s.member_id === me.id ? "You" : s.name}</strong> {s.text}{s.place ? ` (in ${s.place})` : ""}</span>
+              {s.until && <span className="row-meta">{untilLabel(s.until)}</span>}
             </span>
-            {s.member_id === me.id && (
-              <button className="btn btn-quiet btn-small" onClick={() => void clear()}>Clear</button>
-            )}
+            {s.member_id === me.id && <button className="btn btn-quiet btn-small" onClick={() => void clear()}>Clear</button>}
           </li>
         ))}
       </ul>
       {editing ? (
-        <form onSubmit={save} style={{ display: "grid", gap: 8, marginTop: 10 }}>
+        <form onSubmit={save} className="stack-form">
           <input className="field" dir="auto" value={text} onChange={(e) => setText(e.target.value)}
                  placeholder="In a midterm, away, studying…" aria-label="Your status" autoFocus maxLength={80} />
           <input className="field" dir="auto" value={place} onChange={(e) => setPlace(e.target.value)}
                  placeholder="City, if you're away" aria-label="City, if you're away" maxLength={80} />
           <label className="row-meta" htmlFor="until">Until</label>
           <input id="until" className="field" type="time" value={until} onChange={(e) => setUntil(e.target.value)} />
-          <div className="inline-form" style={{ margin: 0 }}>
+          <div className="inline-form">
             <button className="btn" disabled={!text.trim()}>Set status</button>
             <button type="button" className="btn btn-quiet" onClick={() => setEditing(false)}>Cancel</button>
           </div>
         </form>
       ) : (
-        <button className="btn btn-quiet" style={{ marginTop: 10 }} onClick={() => setEditing(true)}>
+        <button className="btn btn-quiet section-action" onClick={() => setEditing(true)}>
           {mine ? "Change my status" : "Set my status"}
         </button>
       )}
@@ -346,72 +387,35 @@ function Around({ me, toast }: { me: Member; toast: (msg: string) => void }) {
   );
 }
 
-function Prayers() {
-  const today = useToday();
-  const prayers = today.data?.prayers;
-  if (!today.data) return null;
-  return (
-    <section className="section" aria-labelledby="prayers">
-      <h2 className="section-title" id="prayers">Prayer times</h2>
-      {prayers?.place && <p className="section-note">In {prayers.place}</p>}
-      {!prayers ? (
-        <p className="empty">Prayer times need the suite's location set on the server.</p>
-      ) : (
-        <ul className="prayers">
-          {prayers.times.map((p) => (
-            <li key={p.name} className={`prayer${p.name === prayers.next ? " next" : ""}${p.name === "sunrise" ? " sunrise" : ""}`}>
-              <span className="prayer-ar" lang="ar">{p.ar}</span>
-              <span className="prayer-en">{p.en}</span>
-              <span className="prayer-time">{p.label}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
+// ---- coming up: exams, reminders and calendar after today, by day ------------------
+
+type Upcoming = { key: string; day: string; sortTime: string; at: number | null; title: ReactNode; sub?: string; action?: ReactNode };
+
+function hhmm(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-// Closed until tapped: nothing is fetched from GRT unless someone actually wants bus times.
-function Buses() {
-  const [open, setOpen] = useState(false);
-  const q = useQuery({ queryKey: ["buses"], queryFn: api.buses, enabled: open, refetchInterval: open ? 60_000 : false });
-  const trips = q.data?.trips ?? [];
-  if (q.data && trips.length === 0) return null;
-  return (
-    <section className="section" aria-labelledby="buses">
-      <details onToggle={(e) => setOpen(e.currentTarget.open)}>
-        <summary className="section-title" id="buses">Buses</summary>
-        {q.isPending && open && <p className="row-meta">Checking GRT…</p>}
-        {q.isError && <p className="notice notice-error">Couldn't reach GRT.</p>}
-        <ul className="rows">
-          {trips.map((t) => (
-            <li className="row" key={t.name}>
-              <span className="row-main">
-                <span className="row-title">{t.name}</span>
-                <span className="row-meta">
-                  {!t.ok ? "Couldn't reach GRT"
-                    : t.departures.length === 0 ? "Nothing soon"
-                    : t.departures.map((d) => `${d.route} ${clock(d.at)}${d.live ? (d.delay_min > 0 ? ` (+${d.delay_min})` : " (live)") : ""}`).join(", ")}
-                </span>
-              </span>
-              {t.departures[0] && <span className="bus-in">{t.departures[0].in_min} min</span>}
-            </li>
-          ))}
-        </ul>
-        {trips.some((t) => t.departures.length > 0 && !t.departures.some((d) => d.live)) && (
-          <p className="section-note">Scheduled times</p>
-        )}
-      </details>
-    </section>
-  );
-}
-
-function MyReminders({ toast }: { toast: (msg: string) => void }) {
+function ComingUp({ me, exams, reminders, toast }: {
+  me: Member;
+  exams: Exam[];
+  reminders: Reminder[];
+  toast: (msg: string) => void;
+}) {
   const qc = useQueryClient();
-  const today = useToday();
-  const reminders = today.data?.reminders ?? [];
+  const cal = useQuery({ queryKey: ["calendar"], queryFn: () => api.calendar(7), retry: 1 });
+  const [adding, setAdding] = useState(false);
+  const day = todayISO();
 
-  async function cancel(id: number) {
+  async function removeExam(id: number) {
+    try {
+      await api.deleteExam(id);
+      await qc.invalidateQueries({ queryKey: ["exams"] });
+    } catch (err) {
+      toast(errorText(err, "Couldn't remove it."));
+    }
+  }
+  async function cancelReminder(id: number) {
     try {
       await api.cancelReminder(id);
       await qc.invalidateQueries({ queryKey: ["today"] });
@@ -420,67 +424,98 @@ function MyReminders({ toast }: { toast: (msg: string) => void }) {
     }
   }
 
-  if (!reminders.length) return null;
-  return (
-    <section className="section" aria-labelledby="reminders">
-      <h2 className="section-title" id="reminders">Reminders</h2>
-      <ul className="rows">
-          {reminders.map((r) => (
-            <li className="row" key={r.id}>
-              <span className="row-main">
-                <span className="row-title">{r.text}</span>
-                <span className="row-meta">
-                  {relativeDay(dayOf(r.due_at))} at {clock(r.due_at)}{r.set_by ? `, from ${r.set_by}` : ""}
-                </span>
-              </span>
-              <button className="btn btn-quiet btn-small" onClick={() => void cancel(r.id)}>Cancel</button>
-            </li>
-          ))}
-      </ul>
-    </section>
-  );
-}
+  const items: Upcoming[] = [
+    ...exams.filter((x) => dayOf(x.starts_at) > day).map((x) => ({
+      key: `x-${x.id}`, day: dayOf(x.starts_at), sortTime: hhmm(x.starts_at), at: new Date(x.starts_at).getTime(),
+      title: <><strong>{x.member_id === me.id ? "Your" : `${x.name}:`}</strong> {x.course} {x.kind}</>,
+      sub: x.room ?? undefined,
+      action: x.can_delete ? <button className="btn btn-quiet btn-small" onClick={() => void removeExam(x.id)}>Remove</button> : undefined,
+    })),
+    ...reminders.filter((r) => dayOf(r.due_at) > day).map((r) => ({
+      key: `r-${r.id}`, day: dayOf(r.due_at), sortTime: hhmm(r.due_at), at: new Date(r.due_at).getTime(), title: r.text,
+      sub: r.set_by ? `Reminder from ${r.set_by}` : "Reminder",
+      action: <button className="btn btn-quiet btn-small" onClick={() => void cancelReminder(r.id)}>Cancel</button>,
+    })),
+    ...(cal.data?.events ?? []).filter((e: CalendarEvent) => e.date > day).map((e) => ({
+      key: `e-${e.id}`, day: e.date, sortTime: e.time ?? "00:00", at: e.time ? at(e.date, e.time) : null,
+      title: e.summary,
+    })),
+  ].sort((a, b) => (a.day + a.sortTime).localeCompare(b.day + b.sortTime));
 
-function Week() {
-  const cal = useQuery({ queryKey: ["calendar"], queryFn: () => api.calendar(7), retry: 1 });
-  const days = new Map<string, CalendarEvent[]>();
-  for (const e of cal.data?.events ?? []) days.set(e.date, [...(days.get(e.date) ?? []), e]);
-  const today = todayISO();
-
+  const days = [...new Set(items.map((i) => i.day))];
   return (
-    <section className="section" aria-labelledby="week">
-      <h2 className="section-title" id="week">This week</h2>
+    <section className="section" aria-labelledby="coming-up">
+      <h2 className="section-title" id="coming-up">Coming up</h2>
       {cal.isError && (
-        <div className="notice notice-error" role="alert">
+        <p className="notice notice-error" role="alert">
           {cal.error instanceof ApiError && cal.error.status === 503
             ? "Couldn't reach the calendar. That doesn't mean it's empty."
             : "Couldn't load the calendar."}{" "}
           <button className="btn-link" onClick={() => void cal.refetch()}>Try again</button>
+        </p>
+      )}
+      {cal.isFetched && !items.length && <p className="empty">Nothing in the next week.</p>}
+      {days.map((d) => (
+        <div className="up-day" key={d}>
+          <h3 className="up-date">{relativeDay(d)}</h3>
+          <ul className="rows">
+            {items.filter((i) => i.day === d).map((i) => (
+              <li className="row" key={i.key}>
+                <span className="up-time"><Time ms={i.at} /></span>
+                <span className="row-main">
+                  <span className="row-title">{i.title}</span>
+                  {i.sub && <span className="row-meta">{i.sub}</span>}
+                </span>
+                {i.action}
+              </li>
+            ))}
+          </ul>
         </div>
+      ))}
+      {adding ? <AddExam onDone={() => setAdding(false)} toast={toast} /> : (
+        <button className="btn btn-quiet section-action" onClick={() => setAdding(true)}>Add an exam</button>
       )}
-      {cal.data && !cal.data.configured && <p className="empty">The suite calendar isn't connected yet.</p>}
-      {cal.data?.configured && days.size === 0 && (
-        <p className="empty">Nothing on the calendar this week.</p>
-      )}
-      {[...days.entries()].map(([date, events]) => {
-        const [weekday, num] = events[0].day.split(" ");
-        return (
-          <div className={`cal-day${date === today ? " cal-today" : ""}`} key={date}>
-            <div className="cal-date">
-              <span className="cal-num">{num}</span>
-              <span className="cal-wd">{date === today ? "Today" : weekday.slice(0, 3)}</span>
-            </div>
-            <ul className="cal-events">
-              {events.map((e) => (
-                <li key={e.id}>
-                  <span className="cal-time">{e.time ?? "All day"}</span>
-                  <span className="row-title" style={{ display: "inline" }}>{e.summary}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        );
-      })}
     </section>
+  );
+}
+
+function AddExam({ onDone, toast }: { onDone: () => void; toast: (msg: string) => void }) {
+  const qc = useQueryClient();
+  const [course, setCourse] = useState("");
+  const [kind, setKind] = useState("midterm");
+  const [date, setDate] = useState("");
+  const [time, setTime] = useState("");
+
+  async function add(e: FormEvent) {
+    e.preventDefault();
+    try {
+      await api.addExam({ course: course.trim(), kind, date, time });
+      await qc.invalidateQueries({ queryKey: ["exams"] });
+      onDone();
+    } catch (err) {
+      toast(errorText(err, "Couldn't add the exam."));
+    }
+  }
+
+  return (
+    <form onSubmit={add} className="stack-form">
+      <div className="inline-form">
+        <input className="field" value={course} onChange={(e) => setCourse(e.target.value)} placeholder="Course"
+               aria-label="Course" autoFocus maxLength={40} />
+        <select className="field field-kind" value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Kind">
+          <option value="quiz">Quiz</option>
+          <option value="midterm">Midterm</option>
+          <option value="final">Final</option>
+        </select>
+      </div>
+      <div className="inline-form">
+        <input className="field" type="date" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Date" />
+        <input className="field" type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Start time" />
+      </div>
+      <div className="inline-form">
+        <button className="btn" disabled={!course.trim() || !date || !time}>Add exam</button>
+        <button type="button" className="btn btn-quiet" onClick={onDone}>Cancel</button>
+      </div>
+    </form>
   );
 }

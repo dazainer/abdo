@@ -23,3 +23,11 @@ seed.sql
 node_modules/
 web/dist/
 web/node_modules/.tmp/
+
+# Impeccable (design skill) working files: decision pages, sketches, review captures.
+# PRODUCT.md, DESIGN.md and .impeccable/surfaces/ are durable and committed.
+.impeccable/mocks/
+.impeccable/questions/
+.impeccable/review/
+.impeccable/build/
+.impeccable/config.local.json

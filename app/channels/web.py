@@ -372,8 +372,12 @@ async def calendar(days: int = Query(default=7, ge=1, le=31), member=Depends(cur
 # --- buses (scheduled or live, straight from GRT; only fetched when someone looks) ----
 
 @router.get("/buses")
-async def buses(member=Depends(current_member)):
-    trips = await transit.overview(await db.bus_trips(), transit.now())
+async def buses(home: bool = False, member=Depends(current_member)):
+    """Every saved trip, or with home=1 only the stop by home (one GRT query, for Today's line)."""
+    trips = await db.bus_trips()
+    if home:
+        trips = [t for t in trips if not t["to_stops"]][:1]
+    trips = await transit.overview(trips, transit.now())
     return {"trips": [{"name": t["name"], "ok": t["ok"], "departures": [
         {"route": d["route"], "headsign": d["headsign"], "stop": d["stop_name"],
          "at": d["at"].isoformat(), "in_min": d["in_min"], "live": d["live"], "delay_min": d["delay_min"],

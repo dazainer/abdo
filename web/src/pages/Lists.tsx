@@ -11,12 +11,41 @@ export function Lists({ toast }: { toast: (msg: string) => void }) {
     <div className="page">
       <header className="screen-head"><Sign ar="الحاجات" en="Lists" /></header>
       <main className="screen">
-        <Polls toast={toast} />
+        <JumpRow />
         <Groceries toast={toast} />
         <Fridge toast={toast} />
+        <Polls toast={toast} />
         <Packages toast={toast} />
       </main>
     </div>
+  );
+}
+
+function reducedMotion(): boolean {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
+// A long page: a row of its sections with counts, one tap to each.
+function JumpRow() {
+  const shopping = useQuery({ queryKey: ["shopping"], queryFn: api.shopping, refetchInterval: 15000 });
+  const fridge = useQuery({ queryKey: ["fridge"], queryFn: api.fridge, refetchInterval: 60_000 });
+  const polls = useQuery({ queryKey: ["polls"], queryFn: api.polls, refetchInterval: 15_000 });
+  const packages = useQuery({ queryKey: ["packages"], queryFn: api.packages, refetchInterval: 15000 });
+  const links = [
+    { id: "groceries", label: "Groceries", n: shopping.data?.items.length },
+    { id: "fridge", label: "Fridge", n: fridge.data?.items.length },
+    { id: "polls", label: "Polls", n: polls.data?.polls.filter((p) => !p.closed).length },
+    { id: "packages", label: "Packages", n: packages.data?.packages.length },
+  ];
+  return (
+    <nav className="jump" aria-label="Sections">
+      {links.map((l) => (
+        <button key={l.id} className="jump-link"
+                onClick={() => document.getElementById(l.id)?.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" })}>
+          {l.label}{l.n ? <span className="jump-n">{l.n}</span> : null}
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -155,7 +184,7 @@ function Fridge({ toast }: { toast: (msg: string) => void }) {
                  aria-label="Expires on (optional)" style={{ flex: "0 0 148px", minWidth: 0 }} />
         </div>
         <div className="inline-form" style={{ margin: 0, alignItems: "center" }}>
-          <label className="row-meta" style={{ display: "flex", gap: 6, alignItems: "center", flex: 1 }}>
+          <label className="check-label">
             <input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} /> Just mine
           </label>
           <button className="btn" disabled={!item.trim()}>Add</button>

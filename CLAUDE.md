@@ -140,8 +140,15 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   the code step.
 - **Mixed Arabic/English text**: use `unicode-bidi: plaintext` so each line reads in its own
   direction. In lists, also pin `text-align: left`, or Arabic rows flush right. Chat bubbles
-  keep `dir="auto"` alignment on purpose. A trailing "?" landing on the left in Arabic-first
-  lines is correct bidi behaviour, not a bug.
+  go through `lib/bidi.tsx`: each line gets its own `dir`, and each sentence (or clause after a
+  spaced dash) is a `<bdi>`, so an English sentence inside an Arabic reply keeps its "?" at its
+  own end. Don't put `unicode-bidi: plaintext` on those lines (it ignores the isolates and flips
+  the line to LTR), and don't use regex lookbehind in frontend code (older iOS Safari can't
+  parse it; the whole app goes blank).
+- **Design system** (Impeccable): `PRODUCT.md` is the product brief, the Today surface brief and
+  direction contract live in `.impeccable/surfaces/`. Today is the home screen (`/`; `/today`
+  redirects for old notification links); chat is `/chat`. Dark theme only. Every fact appears
+  once on Today: today's things are stops on the line, later things are under "Coming up".
 - **Proactive sends (`scheduler.py`) are claimed in the DB before delivery**: a reminder row is
   flipped to `done` with `UPDATE … WHERE NOT done RETURNING`, daily sends insert into
   `sent_log` (`ON CONFLICT DO NOTHING RETURNING`). Railway's zero-downtime deploys briefly run

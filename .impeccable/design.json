@@ -1,0 +1,435 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-13T06:44:05+00:00",
+  "title": "Design System: Abdo",
+  "extensions": {
+    "colorMeta": {
+      "enamel-blue": {
+        "role": "primary",
+        "displayName": "Enamel Blue",
+        "canonical": "oklch(49.6% 0.127 255.6)",
+        "tonalRamp": [
+          "#00003a",
+          "#001f60",
+          "#014083",
+          "#2961a7",
+          "#4b84cd",
+          "#6da7f3",
+          "#96ccff",
+          "#d2f1ff"
+        ]
+      },
+      "signal-gold": {
+        "role": "secondary",
+        "displayName": "Signal Gold",
+        "canonical": "oklch(81.1% 0.166 85.0)",
+        "tonalRamp": [
+          "#220000",
+          "#471100",
+          "#693300",
+          "#8b5400",
+          "#af7700",
+          "#d49a00",
+          "#fabf1f",
+          "#ffeba8"
+        ]
+      },
+      "night-navy": {
+        "role": "neutral",
+        "displayName": "Night Navy",
+        "canonical": "oklch(21.6% 0.038 257.2)",
+        "tonalRamp": [
+          "#030b1b",
+          "#192637",
+          "#354356",
+          "#546277",
+          "#748499",
+          "#96a6bd",
+          "#bacbe2",
+          "#dff0ff"
+        ]
+      },
+      "night-surface": {
+        "role": "neutral",
+        "displayName": "Night Surface",
+        "canonical": "oklch(26.7% 0.048 257.5)",
+        "tonalRamp": [
+          "#010a1f",
+          "#15253c",
+          "#32435c",
+          "#50627d",
+          "#7084a0",
+          "#92a7c4",
+          "#b6cbe9",
+          "#dbf0ff"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "oklch(32.3% 0.054 258.3)",
+        "tonalRamp": [
+          "#000a21",
+          "#14253f",
+          "#30435f",
+          "#4e6280",
+          "#6f84a3",
+          "#91a7c7",
+          "#b4cbed",
+          "#d9f0ff"
+        ]
+      },
+      "enamel-white": {
+        "role": "neutral",
+        "displayName": "Enamel White",
+        "canonical": "oklch(97.5% 0.004 121.6)",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#252523",
+          "#414240",
+          "#61625f",
+          "#828380",
+          "#a4a5a3",
+          "#c8c9c7",
+          "#eeefec"
+        ]
+      },
+      "moon-text": {
+        "role": "neutral",
+        "displayName": "Moon Text",
+        "canonical": "oklch(95.7% 0.006 255.5)",
+        "tonalRamp": [
+          "#090b0e",
+          "#232528",
+          "#404245",
+          "#5f6165",
+          "#808286",
+          "#a2a5a9",
+          "#c6c9cd",
+          "#eceff3"
+        ]
+      },
+      "dusk-text": {
+        "role": "neutral",
+        "displayName": "Dusk Text",
+        "canonical": "oklch(75.2% 0.039 257.0)",
+        "tonalRamp": [
+          "#020b1b",
+          "#182638",
+          "#354357",
+          "#536278",
+          "#73849a",
+          "#96a6be",
+          "#b9cbe3",
+          "#def0ff"
+        ]
+      },
+      "blue-black-ink": {
+        "role": "neutral",
+        "displayName": "Blue-Black Ink",
+        "canonical": "oklch(25.3% 0.034 264.7)",
+        "tonalRamp": [
+          "#050a1a",
+          "#1d2536",
+          "#394255",
+          "#586175",
+          "#788298",
+          "#9aa5bb",
+          "#bec9e0",
+          "#e3efff"
+        ]
+      },
+      "recording-red": {
+        "role": "status",
+        "displayName": "Recording Red",
+        "canonical": "oklch(50.1% 0.178 28.7)",
+        "tonalRamp": [
+          "#220000",
+          "#500000",
+          "#850000",
+          "#b0221b",
+          "#d84c3f",
+          "#ff7161",
+          "#ffb0a3",
+          "#ffe6e0"
+        ]
+      },
+      "alarm-coral": {
+        "role": "status",
+        "displayName": "Alarm Coral",
+        "canonical": "oklch(75.9% 0.144 26.1)",
+        "tonalRamp": [
+          "#220000",
+          "#500001",
+          "#7d0e13",
+          "#a33733",
+          "#ca5b53",
+          "#f27e75",
+          "#ffafa6",
+          "#ffe5e1"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The large sign on the login screen only."
+      },
+      "numeral": {
+        "displayName": "Numeral",
+        "purpose": "One big figure per plate: the briefing temperature, the money balance."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Arabic line of every screen sign; the briefing greeting."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Section headings, poll questions, free-together windows."
+      },
+      "time": {
+        "displayName": "Time",
+        "purpose": "Route-stop times, prayer names on stops, calendar times."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Row titles, chat, fields."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Meta lines, tabs, chips, notices, toasts."
+      },
+      "sign-caption": {
+        "displayName": "Sign Caption",
+        "purpose": "The English line beneath the Arabic on a sign."
+      },
+      "micro": {
+        "displayName": "Micro",
+        "purpose": "Units and companions to a larger figure: am/pm, hour labels, rain chance, badges."
+      }
+    },
+    "shadows": [
+      {
+        "name": "enamel-ring",
+        "value": "inset 0 0 0 4px var(--plate), inset 0 0 0 6px rgba(246, 247, 244, 0.85)",
+        "purpose": "The white ring inset in every plate (sign, chat bubble)."
+      },
+      {
+        "name": "enamel-ring-large",
+        "value": "inset 0 0 0 5px var(--plate), inset 0 0 0 7px rgba(246, 247, 244, 0.85)",
+        "purpose": "The ring on the large plates: briefing, money balance."
+      },
+      {
+        "name": "selected-outline",
+        "value": "0 0 0 1px var(--plate)",
+        "purpose": "Chosen poll option, current code slot (2px gold when the code input is focused)."
+      },
+      {
+        "name": "switch-knob",
+        "value": "0 1px 2px rgba(26, 34, 51, 0.3)",
+        "purpose": "The only drop shadow: the toggle knob."
+      },
+      {
+        "name": "recording-pulse",
+        "value": "0 0 0 0 rgba(179, 38, 30, 0.45) -> 0 0 0 10px rgba(179, 38, 30, 0)",
+        "purpose": "Keyframed pulse on the mic while recording."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out-expo",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Authored ease for the now-tick draw and the bus chevron."
+      },
+      {
+        "name": "now-draw",
+        "value": "0.6s",
+        "purpose": "The gold now tick draws across the route line once when Today opens."
+      },
+      {
+        "name": "chevron-turn",
+        "value": "0.2s",
+        "purpose": "Bus stop chevron rotates 90 degrees on expand."
+      },
+      {
+        "name": "switch-slide",
+        "value": "0.15s",
+        "purpose": "Toggle knob slide."
+      },
+      {
+        "name": "recording-pulse",
+        "value": "1.2s ease-in-out infinite",
+        "purpose": "Mic while held to talk."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "prefers-reduced-motion: reduce",
+        "purpose": "All of the above switch off."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "column",
+        "value": "640px"
+      },
+      {
+        "name": "login-column",
+        "value": "420px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Street Sign",
+      "kind": "custom",
+      "refersTo": "sign-plate",
+      "description": "Every screen title: an enamel plate with an inset white ring, Arabic on top, English beneath.",
+      "html": "<h1 class=\"ds-sign\"><span class=\"ds-sign-ar\" lang=\"ar\" dir=\"rtl\">النهاردة</span><span class=\"ds-sign-en\">Today</span></h1>",
+      "css": ".ds-sign { display: inline-flex; flex-direction: column; align-items: center; margin: 0; padding: 10px 22px 9px; background: var(--plate, #2a62a8); color: var(--white, #f6f7f4); border-radius: 14px; box-shadow: inset 0 0 0 4px var(--plate, #2a62a8), inset 0 0 0 6px rgba(246, 247, 244, 0.85); font-family: var(--font-sign, Alexandria, 'IBM Plex Sans Arabic', system-ui, sans-serif); line-height: 1.15; } .ds-sign-ar { font-size: 1.5625rem; font-weight: 700; line-height: 1.45; } .ds-sign-en { font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.02em; opacity: 0.92; }"
+    },
+    {
+      "name": "Briefing Plate",
+      "kind": "card",
+      "refersTo": "briefing-plate",
+      "description": "Abdo's morning briefing: date, Arabic greeting, weather now, and an hourly strip, all on enamel.",
+      "html": "<section class=\"ds-brief\"><p class=\"ds-brief-day\">Tuesday 13 October</p><h2 class=\"ds-brief-title\" dir=\"rtl\" lang=\"ar\">صباح الخير</h2><div class=\"ds-brief-wx\"><span class=\"ds-brief-icon\"><svg viewBox=\"0 0 24 24\" width=\"34\" height=\"34\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9z\"/></svg></span><span class=\"ds-brief-temp\">18<span class=\"ds-deg\">°</span></span><span class=\"ds-brief-sky\"><b>Cloudy</b><span>Feels like 17°. High 25°, low 17°</span></span></div><ol class=\"ds-hours\"><li><span>3 AM</span><svg viewBox=\"0 0 24 24\" width=\"20\" height=\"20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9z\"/></svg><b>18°</b></li><li><span>4</span><svg viewBox=\"0 0 24 24\" width=\"20\" height=\"20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9z\"/></svg><b>18°</b></li><li><span>5</span><svg viewBox=\"0 0 24 24\" width=\"20\" height=\"20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9z\"/></svg><b>18°</b></li><li><span>6</span><svg viewBox=\"0 0 24 24\" width=\"20\" height=\"20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9z\"/></svg><b>19°</b></li></ol></section>",
+      "css": ".ds-brief { max-width: 360px; padding: 18px 20px 16px; background: var(--plate, #2a62a8); color: var(--white, #f6f7f4); border-radius: 18px; box-shadow: inset 0 0 0 5px var(--plate, #2a62a8), inset 0 0 0 7px rgba(246, 247, 244, 0.85); font-family: var(--font-body, 'IBM Plex Sans Arabic', system-ui, sans-serif); } .ds-brief-day { margin: 0; font-size: 0.8125rem; opacity: 0.85; } .ds-brief-title { margin: 0 0 10px; font-family: var(--font-sign, Alexandria, 'IBM Plex Sans Arabic', system-ui, sans-serif); font-size: 1.5625rem; font-weight: 700; line-height: 1.5; text-align: right; } .ds-brief-wx { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid rgba(246, 247, 244, 0.25); } .ds-brief-icon { color: var(--gold, #f2b705); display: flex; } .ds-brief-temp { font-family: var(--font-sign, Alexandria, 'IBM Plex Sans Arabic', system-ui, sans-serif); font-size: 2.75rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; } .ds-deg { font-size: 0.55em; vertical-align: 0.75em; } .ds-brief-sky { display: flex; flex-direction: column; font-size: 0.8125rem; line-height: 1.35; } .ds-brief-sky b { font-size: 1rem; font-weight: 600; } .ds-hours { list-style: none; margin: 0; padding: 10px 0 0; border-top: 1px solid rgba(246, 247, 244, 0.25); display: grid; grid-auto-flow: column; grid-auto-columns: minmax(38px, 1fr); } .ds-hours li { display: flex; flex-direction: column; align-items: center; gap: 3px; font-variant-numeric: tabular-nums; } .ds-hours span { font-size: 0.6875rem; opacity: 0.8; } .ds-hours svg { color: var(--gold, #f2b705); } .ds-hours b { font-family: var(--font-sign, Alexandria, 'IBM Plex Sans Arabic', system-ui, sans-serif); font-weight: 600; font-size: 0.8125rem; }"
+    },
+    {
+      "name": "Route Line",
+      "kind": "custom",
+      "refersTo": "route-line",
+      "description": "Today as a transit line: ring stops, gold prayer rings, a square bus stop, the gold now tick, a terminus bar.",
+      "html": "<ol class=\"ds-line\"><li class=\"ds-now\"><span>Now 2:38 <small>am</small></span></li><li class=\"ds-stop ds-bus\"><span class=\"ds-t\">2:42 <small>am</small></span><span>7 to Downtown <b class=\"ds-in\">in 3 min</b></span></li><li class=\"ds-stop\"><span class=\"ds-t\">3:06 <small>am</small></span><span>Switch the laundry<small class=\"ds-meta\">Reminder</small></span></li><li class=\"ds-stop ds-prayer ds-next\"><span class=\"ds-t\">6:13 <small>am</small></span><span><bdi lang=\"ar\" class=\"ds-ar\">الفجر</bdi> Fajr</span></li><li class=\"ds-stop ds-prayer\"><span class=\"ds-t\">1:07 <small>pm</small></span><span><bdi lang=\"ar\" class=\"ds-ar\">الضهر</bdi> <small class=\"ds-en\">Dhuhr</small></span></li></ol>",
+      "css": ".ds-line { position: relative; list-style: none; margin: 0; padding: 0 0 0 30px; max-width: 360px; color: var(--text, #eef1f5); font-family: var(--font-body, 'IBM Plex Sans Arabic', system-ui, sans-serif); } .ds-line::before { content: ''; position: absolute; left: 9px; top: 12px; bottom: 12px; width: 4px; border-radius: 2px; background: var(--plate, #2a62a8); } .ds-line::after { content: ''; position: absolute; left: 3px; bottom: 10px; width: 16px; height: 4px; border-radius: 2px; background: var(--plate, #2a62a8); } .ds-stop { position: relative; display: grid; grid-template-columns: 62px 1fr; align-items: center; column-gap: 10px; min-height: 48px; padding: 6px 0; } .ds-stop::before { content: ''; position: absolute; left: -26px; top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%; background: var(--bg, #0e1a2b); border: 3px solid var(--white, #f6f7f4); box-sizing: border-box; } .ds-t { font-family: var(--font-sign, Alexandria, 'IBM Plex Sans Arabic', system-ui, sans-serif); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; } .ds-t small, .ds-en, .ds-meta { font-size: 0.6875rem; font-weight: 500; color: var(--text-soft, #9fb0c8); } .ds-meta { display: block; font-size: 0.8125rem; } .ds-ar { font-family: var(--font-sign, Alexandria, 'IBM Plex Sans Arabic', system-ui, sans-serif); font-weight: 600; } .ds-prayer::before { border-color: var(--gold, #f2b705); } .ds-next::before { background: var(--gold, #f2b705); } .ds-next, .ds-next .ds-t { color: var(--gold, #f2b705); } .ds-bus::before { border-radius: 3px; background: var(--plate, #2a62a8); } .ds-in { color: var(--gold, #f2b705); font-size: 0.8125rem; font-weight: 600; } .ds-now { position: relative; display: flex; align-items: center; min-height: 34px; color: var(--gold, #f2b705); font-family: var(--font-sign, Alexandria, 'IBM Plex Sans Arabic', system-ui, sans-serif); font-weight: 600; font-size: 0.8125rem; } .ds-now::before { content: ''; position: absolute; left: -28px; top: 50%; width: 18px; height: 4px; margin-top: -2px; border-radius: 2px; background: var(--gold, #f2b705); transform-origin: left center; animation: ds-now-draw 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; } @keyframes ds-now-draw { from { transform: scaleX(0); opacity: 0; } to { transform: scaleX(1); opacity: 1; } } @media (prefers-reduced-motion: reduce) { .ds-now::before { animation: none; } }"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The main action: an enamel-blue plate without the ring.",
+      "html": "<button class=\"ds-btn\">Set status</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 18px; border: 0; border-radius: 12px; background: var(--plate, #2a62a8); color: var(--white, #f6f7f4); font-family: var(--font-body, 'IBM Plex Sans Arabic', system-ui, sans-serif); font-size: 1rem; font-weight: 600; cursor: pointer; } .ds-btn:focus-visible { outline: 2px solid var(--gold, #f2b705); outline-offset: 2px; } .ds-btn:disabled { opacity: 0.55; cursor: default; }"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Secondary and row actions: transparent with a hairline border.",
+      "html": "<button class=\"ds-btn-quiet\">Set my status</button> <button class=\"ds-btn-quiet ds-small\">Cancel</button>",
+      "css": ".ds-btn-quiet { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 18px; border: 1px solid var(--line, #22344f); border-radius: 12px; background: transparent; color: var(--text, #eef1f5); font-family: var(--font-body, 'IBM Plex Sans Arabic', system-ui, sans-serif); font-size: 1rem; font-weight: 600; cursor: pointer; } .ds-btn-quiet:focus-visible { outline: 2px solid var(--gold, #f2b705); outline-offset: 2px; } .ds-small { min-height: 34px; padding: 0 12px; border-radius: 10px; font-size: 0.8125rem; }"
+    },
+    {
+      "name": "Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Text input on the night surface; each line reads in its own direction, gold caret and focus.",
+      "html": "<input class=\"ds-field\" dir=\"auto\" placeholder=\"What are you up to?\">",
+      "css": ".ds-field { width: 100%; max-width: 360px; min-height: 46px; padding: 10px 14px; border: 1px solid var(--line, #22344f); border-radius: 12px; background: var(--surface, #16263d); color: var(--text, #eef1f5); font-family: var(--font-body, 'IBM Plex Sans Arabic', system-ui, sans-serif); font-size: 1rem; caret-color: var(--gold, #f2b705); unicode-bidi: plaintext; } .ds-field::placeholder { color: var(--text-soft, #9fb0c8); } .ds-field:focus-visible { outline: 2px solid var(--gold, #f2b705); outline-offset: 2px; }"
+    },
+    {
+      "name": "Needs-You Chip",
+      "kind": "chip",
+      "refersTo": "chip-need",
+      "description": "Gold-outlined pill linking a fact to where you act on it; lives in the scrolling row under the briefing.",
+      "html": "<a class=\"ds-need\" href=\"#\">Desk lamp is waiting at the building</a> <a class=\"ds-need\" href=\"#\">Milk: use by Friday</a>",
+      "css": ".ds-need { display: inline-flex; align-items: center; min-height: 40px; padding: 0 14px; border: 1px solid var(--gold, #f2b705); border-radius: 999px; color: var(--text, #eef1f5); text-decoration: none; font-family: var(--font-body, 'IBM Plex Sans Arabic', system-ui, sans-serif); font-size: 0.8125rem; font-weight: 500; white-space: nowrap; unicode-bidi: plaintext; } .ds-need:active { background: rgba(242, 183, 5, 0.14); } .ds-need:focus-visible { outline: 2px solid var(--gold, #f2b705); outline-offset: 2px; }"
+    },
+    {
+      "name": "Tab Bar",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "Fixed bottom navigation: stroke icons over labels; the active tab gets a gold icon and underline.",
+      "html": "<nav class=\"ds-tabs\"><a class=\"ds-tab ds-active\" href=\"#\"><svg viewBox=\"0 0 24 24\" width=\"24\" height=\"24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v10a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5zM4 10h16M8.5 3v4M15.5 3v4\"/></svg><span>Today</span></a><a class=\"ds-tab\" href=\"#\"><svg viewBox=\"0 0 24 24\" width=\"24\" height=\"24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4h0A2.5 2.5 0 0 1 4 13.5z\"/></svg><span>Chat</span></a><a class=\"ds-tab\" href=\"#\"><svg viewBox=\"0 0 24 24\" width=\"24\" height=\"24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01\"/></svg><span>Lists</span></a></nav>",
+      "css": ".ds-tabs { display: flex; max-width: 390px; height: 64px; background: var(--surface, #16263d); border-top: 1px solid var(--line, #22344f); font-family: var(--font-body, 'IBM Plex Sans Arabic', system-ui, sans-serif); } .ds-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: var(--text-soft, #9fb0c8); text-decoration: none; font-size: 0.8125rem; font-weight: 500; } .ds-tab:focus-visible { outline: 2px solid var(--gold, #f2b705); outline-offset: 2px; } .ds-active { color: var(--text, #eef1f5); } .ds-active svg { color: var(--gold, #f2b705); } .ds-active::after { content: ''; width: 18px; height: 3px; border-radius: 2px; background: var(--gold, #f2b705); margin-top: 2px; }"
+    },
+    {
+      "name": "Chat Bubbles",
+      "kind": "custom",
+      "refersTo": "bubble-abdo",
+      "description": "Abdo speaks on enamel (ringed plate, tail toward him); mine sits on the night surface.",
+      "html": "<div class=\"ds-chat\"><div class=\"ds-bubble ds-abdo\" dir=\"auto\">أكيد، ضفت اللبن على الليستة</div><div class=\"ds-bubble ds-mine\" dir=\"auto\">Add milk to the list please</div></div>",
+      "css": ".ds-chat { display: flex; flex-direction: column; gap: 6px; max-width: 360px; font-family: var(--font-body, 'IBM Plex Sans Arabic', system-ui, sans-serif); } .ds-bubble { max-width: 84%; padding: 10px 14px; border-radius: 16px; overflow-wrap: anywhere; } .ds-abdo { align-self: flex-start; padding: 12px 16px; background: var(--plate, #2a62a8); color: var(--white, #f6f7f4); box-shadow: inset 0 0 0 4px var(--plate, #2a62a8), inset 0 0 0 6px rgba(246, 247, 244, 0.85); border-end-start-radius: 6px; } .ds-mine { align-self: flex-end; background: var(--surface, #16263d); color: var(--text, #eef1f5); border: 1px solid var(--line, #22344f); border-end-end-radius: 6px; }"
+    },
+    {
+      "name": "Mic Button",
+      "kind": "button",
+      "refersTo": "mic-button",
+      "description": "Hold-to-talk: a gold circle that turns recording red and pulses while held.",
+      "html": "<button class=\"ds-mic\" aria-label=\"Hold to talk\"><svg viewBox=\"0 0 24 24\" width=\"22\" height=\"22\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21\"/></svg></button> <button class=\"ds-mic ds-rec\" aria-label=\"Recording\"><svg viewBox=\"0 0 24 24\" width=\"22\" height=\"22\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21\"/></svg></button>",
+      "css": ".ds-mic { width: 46px; height: 46px; border-radius: 50%; border: 0; display: inline-flex; align-items: center; justify-content: center; background: var(--gold, #f2b705); color: var(--ink, #1a2233); cursor: pointer; } .ds-mic:focus-visible { outline: 2px solid var(--gold, #f2b705); outline-offset: 2px; } .ds-rec { background: var(--danger, #b3261e); color: var(--white, #f6f7f4); animation: ds-pulse 1.2s ease-in-out infinite; } @keyframes ds-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(179, 38, 30, 0.45); } 50% { box-shadow: 0 0 0 10px rgba(179, 38, 30, 0); } } @media (prefers-reduced-motion: reduce) { .ds-rec { animation: none; } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Street Signs on a Night Street",
+    "overview": "Abdo is a Cairene roommate, so his app is dressed in the most Cairene object there is: the blue enamel street sign, with white lettering and a white ring set in from the edge. The signs hang on a navy night. Everything Abdo says is a plate: each screen's title, his chat bubbles, the morning briefing, the money balance. Everything else sits quietly on the navy (rows, hairlines, soft secondary text), so the plates carry the screen.\n\nOn top of the blue and white there is one signal colour: gold, for whatever is happening now or needs you next. That covers the \"now\" tick on the day's route line, the next prayer, the active tab, the needs-you chips, the hold-to-talk mic and the focus ring. The screens are dense and built for a quick glance on a phone held in one hand: a single column, rows at least 44 to 52px tall, and times and numbers set in the sign face with tabular figures so they line up like a timetable.\n\nThe app speaks two languages throughout. Titles read Arabic first in large type, with English beneath at caption size, the way a bilingual street sign does. Every line of mixed text reads in its own direction. The app is dark only for now.",
+    "keyCharacteristics": [
+      "Enamel-blue plates with an inset white ring mark Abdo's own voice; nothing else gets a plate.",
+      "One navy night ground with tonal surfaces and hairlines; no drop-shadow elevation.",
+      "Gold signals now, next and act; it is never decoration.",
+      "Two faces: Alexandria for signs, headings, times and numbers; IBM Plex Sans Arabic for running text.",
+      "Arabic-first bilingual titles; `unicode-bidi: plaintext` on every mixed line.",
+      "Today is a transit route: a 4px enamel-blue line with ring stops, square bus stops, and a terminus bar."
+    ],
+    "rules": [
+      {
+        "name": "The Enamel Voice Rule",
+        "body": "A plate (enamel blue, white ring, white lettering) means Abdo is speaking or a screen is naming itself: screen titles, his chat bubbles, the briefing, the money balance. Ordinary rows, lists and forms never sit on a plate.",
+        "section": "colors"
+      },
+      {
+        "name": "The Gold Means Now Rule",
+        "body": "Gold marks only what is current, next, active or waiting on you. If a gold element doesn't answer \"what's happening now, or what should I do?\", it shouldn't be gold.",
+        "section": "colors"
+      },
+      {
+        "name": "The Arabic Leads Rule",
+        "body": "Every screen title is a sign: the Arabic name large on top, the English name beneath at caption size. Arabic is never the smaller line.",
+        "section": "typography"
+      },
+      {
+        "name": "The Two Faces Rule",
+        "body": "Alexandria for anything a sign would show (names, headings, times, numbers); Plex Sans Arabic for sentences. Don't add a third family.",
+        "section": "typography"
+      },
+      {
+        "name": "The Timetable Figures Rule",
+        "body": "Times, temperatures, amounts and counts use tabular figures (`font-variant-numeric: tabular-nums`), so columns of times line up like a schedule.",
+        "section": "typography"
+      },
+      {
+        "name": "The Own-Direction Rule",
+        "body": "Every text surface that can mix scripts uses `unicode-bidi: plaintext`. In lists, also pin `text-align: left`, so Arabic rows don't flush right. Chat bubbles keep `dir=\"auto\"` alignment on purpose.",
+        "section": "typography"
+      },
+      {
+        "name": "The Route Grammar",
+        "body": "Today lays out time as a transit line. The list is indented 30px, and a 4px enamel-blue line runs down the left with rounded caps. Each stop is a three-column grid: a 62px time, then the content, then an optional action. Each stop marker is a 14px ring centred on the line. The gold \"now\" tick (18 by 4px) crosses the line at the current moment, and a 16px terminus bar closes the line under the last stop.",
+        "section": "layout"
+      },
+      {
+        "name": "The Ring, Not Shadow Rule",
+        "body": "Plates get their presence from the inset white ring and the blue. Cards, rows and plates never get drop shadows.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do give each screen exactly one street-sign title, Arabic on top and English beneath, centred in the fixed header.",
+      "Do put Abdo's own words (his briefing, his chat bubbles, the balance he keeps) on an enamel plate with the inset white ring.",
+      "Do keep gold for now, next, active and needs-you. Gold fills are only for the mic and the \"mark paid\" action, with Blue-Black Ink text on them.",
+      "Do set times, temperatures and amounts in Alexandria with tabular figures.",
+      "Do use `unicode-bidi: plaintext` on every line that can mix scripts, and `text-align: left` in lists.",
+      "Do keep tap targets at least 44px, and use logical properties (`inset-inline-start`, `border-end-start-radius`) so the layout mirrors cleanly in right-to-left text.",
+      "Do respect `prefers-reduced-motion`: the now-tick draw, the chevron turn, the switch slide and the recording pulse all turn off."
+    ],
+    "donts": [
+      "Don't put drop shadows on plates, cards or rows. Depth is the ring and the navy tones.",
+      "Don't put ordinary lists, forms or settings on a plate. A plate means Abdo or a screen title.",
+      "Don't use gold as decoration, or in large fills beyond the mic and the settle-up action.",
+      "Don't make English the larger or leading line in a title.",
+      "Don't add a third typeface, an icon font, or emoji standing in for icons.",
+      "Don't add a light theme or light surfaces without a deliberate system change. The world is a night street.",
+      "Don't let an Arabic row flush right inside a list."
+    ]
+  }
+}
