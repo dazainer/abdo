@@ -31,3 +31,10 @@ export function clock(timestamp: string): string {
 export function todayISO(): string {
   return localISO(new Date());
 }
+
+/** A Waterloo term code from its start date: "F26" (Sep-Dec), "W27" (Jan-Apr), "S27" (May-Aug). */
+export function termLabel(startISO: string): string {
+  const [y, m] = startISO.split("-").map(Number);
+  if (!y || !m) return "";
+  return `${m >= 9 ? "F" : m >= 5 ? "S" : "W"}${String(y % 100).padStart(2, "0")}`;
+}

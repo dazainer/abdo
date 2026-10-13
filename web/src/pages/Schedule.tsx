@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type ProposedClass, type ProposedExam, type SavedClass } from "../api";
-import { relativeDay } from "../lib/dates";
+import { relativeDay, termLabel } from "../lib/dates";
 import { Sign } from "../components/Sign";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -38,7 +38,7 @@ export function Schedule({ toast }: { toast: (msg: string) => void }) {
 }
 
 function Week({ classes }: { classes: SavedClass[] }) {
-  const term = classes[0] ? `${classes[0].term_start} to ${classes[0].term_end}` : "";
+  const term = classes[0] ? termLabel(classes[0].term_start) : "";
   return (
     <section className="section" aria-labelledby="week-classes">
       <h2 className="section-title" id="week-classes">Your week</h2>

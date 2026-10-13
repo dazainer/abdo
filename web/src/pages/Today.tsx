@@ -68,8 +68,8 @@ function BriefingCard() {
           <span className="briefing-sky">
             <span className="briefing-sky-main">{w.sky}</span>
             <span>
-              {w.feels !== w.temp ? `Feels ${w.feels}°, ` : ""}{w.high}° / {w.low}°
-              {w.rain ? `, ${w.rain}% rain` : ""}
+              {w.feels !== w.temp ? `Feels like ${w.feels}°. ` : ""}High {w.high}°, low {w.low}°
+              {w.rain !== null ? `. ${w.rain}% chance of rain or snow` : ""}
             </span>
           </span>
         </div>
