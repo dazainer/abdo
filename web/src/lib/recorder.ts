@@ -133,6 +133,40 @@ export function unlockAudio(opts: { fresh?: boolean } = {}): void {
   } else if (state === "suspended") {
     void ctx.resume().catch(() => undefined);
   }
+  keepAlive(ctx);
+}
+
+// While Abdo is thinking (a long reply can take a while to speak), iOS lets an idle audio
+// context lapse, and then the reply can't start without another tap. Playing silence from
+// the moment of the tap keeps it running until the reply plays, for up to two minutes.
+const KEEP_ALIVE_MS = 120_000;
+let silence: AudioBufferSourceNode | null = null;
+let silenceTimer: ReturnType<typeof setTimeout> | undefined;
+
+function keepAlive(context: AudioContext): void {
+  stopKeepAlive();
+  try {
+    const buffer = context.createBuffer(1, Math.ceil(context.sampleRate / 2), context.sampleRate);
+    const src = context.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    src.connect(context.destination);
+    src.start();
+    silence = src;
+    silenceTimer = setTimeout(stopKeepAlive, KEEP_ALIVE_MS);
+  } catch {
+    /* no audio at all: nothing to keep alive */
+  }
+}
+
+export function stopKeepAlive(): void {
+  clearTimeout(silenceTimer);
+  try {
+    silence?.stop();
+  } catch {
+    /* already stopped */
+  }
+  silence = null;
 }
 
 export function stopAudio(): void {
@@ -167,6 +201,7 @@ export async function playMp3(base64: string, opts: { fromTap?: boolean } = {}):
     const bytes = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
     const buffer = await context.decodeAudioData(bytes.buffer);
+    stopKeepAlive();
     stopAudio(); // one voice at a time: a new reply cuts off the previous one
     const source = context.createBufferSource();
     source.buffer = buffer;

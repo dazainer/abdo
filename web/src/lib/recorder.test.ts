@@ -8,7 +8,15 @@ class FakeContext {
   static hangOnResume = false;
   state: string = FakeContext.startState;
   destination = {};
-  sources: { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }[] = [];
+  sampleRate = 48000;
+  // Every source made; `voices` are the real replies (the silent keep-alive loops).
+  sources: { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; loop?: boolean }[] = [];
+  get voices() {
+    return this.sources.filter((s) => !s.loop);
+  }
+  get silence() {
+    return this.sources.filter((s) => s.loop);
+  }
   constructor() {
     FakeContext.instances.push(this);
   }
@@ -20,6 +28,9 @@ class FakeContext {
   close() {
     this.state = "closed";
     return Promise.resolve();
+  }
+  createBuffer() {
+    return {};
   }
   decodeAudioData() {
     return Promise.resolve({});
@@ -56,7 +67,7 @@ describe("playMp3", () => {
     const { playMp3, unlockAudio } = await load();
     unlockAudio();
     expect(await playMp3(MP3)).toBe(true);
-    expect(FakeContext.instances[0].sources[0].start).toHaveBeenCalled();
+    expect(FakeContext.instances[0].voices[0].start).toHaveBeenCalled();
   });
 
   it("gives up quickly when iOS hangs resume(), and never plays that reply later", async () => {
@@ -70,7 +81,7 @@ describe("playMp3", () => {
     expect(Date.now() - started).toBeLessThan(RESUME_WAIT_MS + 300);
     ctx.state = "running"; // the next tap would resume it…
     await new Promise((r) => setTimeout(r, 20));
-    expect(ctx.sources).toHaveLength(0); // …but the old reply doesn't burst out
+    expect(ctx.voices).toHaveLength(0); // …but the old reply doesn't burst out
   });
 
   it("a tap replaces an interrupted context and plays", async () => {
@@ -79,7 +90,7 @@ describe("playMp3", () => {
     FakeContext.instances[0].state = "interrupted";
     expect(await playMp3(MP3, { fromTap: true })).toBe(true);
     expect(FakeContext.instances).toHaveLength(2);
-    expect(FakeContext.instances[1].sources[0].start).toHaveBeenCalled();
+    expect(FakeContext.instances[1].voices[0].start).toHaveBeenCalled();
   });
 
   it("unlock with fresh: true always starts a new running context (after the mic closes)", async () => {
@@ -90,7 +101,7 @@ describe("playMp3", () => {
     expect(FakeContext.instances).toHaveLength(2);
     expect(FakeContext.instances[0].state).toBe("closed");
     expect(await playMp3(MP3)).toBe(true);
-    expect(FakeContext.instances[1].sources[0].start).toHaveBeenCalled();
+    expect(FakeContext.instances[1].voices[0].start).toHaveBeenCalled();
   });
 
   it("plays one voice at a time", async () => {
@@ -98,7 +109,7 @@ describe("playMp3", () => {
     unlockAudio();
     await playMp3(MP3);
     await playMp3(MP3);
-    const [first, second] = FakeContext.instances[0].sources;
+    const [first, second] = FakeContext.instances[0].voices;
     expect(first.stop).toHaveBeenCalled();
     expect(second.start).toHaveBeenCalled();
   });
@@ -113,5 +124,15 @@ describe("spoken replies", () => {
     for (let i = 0; i < 25; i++) rememberSpoken(`r${i}`, "x");
     expect(spokenAudio("first")).toBeUndefined();
     expect(spokenAudio("r24")).toBe("x");
+  });
+
+  it("keeps the context alive with silence from the tap until the reply plays", async () => {
+    const { playMp3, unlockAudio } = await load();
+    unlockAudio({ fresh: true });
+    const ctx = FakeContext.instances[0];
+    expect(ctx.silence).toHaveLength(1);
+    expect(ctx.silence[0].start).toHaveBeenCalled();
+    expect(await playMp3(MP3)).toBe(true);
+    expect(ctx.silence[0].stop).toHaveBeenCalled();
   });
 });

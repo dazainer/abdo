@@ -141,12 +141,20 @@ def free_windows(window: tuple[datetime, datetime], busy: list[tuple[datetime, d
     return free
 
 
-def busy_on(day: date, classes, exams, tz: ZoneInfo) -> list[Busy]:
+def on_break(day: date, member_id, breaks) -> dict | None:
+    """The member's break covering `day` (reading week etc.), or None."""
+    return next((b for b in breaks or () if b["member_id"] == member_id
+                 and b["starts_on"] <= day <= b["ends_on"]), None)
+
+
+def busy_on(day: date, classes, exams, tz: ZoneInfo, breaks=()) -> list[Busy]:
     """One member's commitments on a local day: classes meeting that weekday within the
-    term, and exams starting that day."""
+    term (unless that member is on a break that day), and exams starting that day.
+    Exams still count during a break."""
     out = []
     for c in classes:
-        if c["weekday"] == day.weekday() and c["term_start"] <= day <= c["term_end"]:
+        if c["weekday"] == day.weekday() and c["term_start"] <= day <= c["term_end"] \
+                and not on_break(day, c["member_id"], breaks):
             out.append(Busy(datetime.combine(day, c["starts"], tz), datetime.combine(day, c["ends"], tz),
                             f"{c['course']} {c['kind'] or ''}".strip()))
     for e in exams:
@@ -172,6 +180,7 @@ async def who_is_free(day: date, from_time: time | None = None, to_time: time | 
 
     members = await db.all_members()
     classes = await db.classes_for()
+    breaks = await db.class_breaks(since=day)
     day_start = datetime.combine(day, time(0, 0), tz)
     exams = await db.exams_between(day_start, day_start + timedelta(days=1))
     places = await location.all_locations(members)
@@ -180,7 +189,7 @@ async def who_is_free(day: date, from_time: time | None = None, to_time: time | 
     for m in members:
         loc = places.get(m["id"])
         mine_c = [c for c in classes if c["member_id"] == m["id"]]
-        busy = busy_on(day, mine_c, [e for e in exams if e["member_id"] == m["id"]], tz)
+        busy = busy_on(day, mine_c, [e for e in exams if e["member_id"] == m["id"]], tz, breaks)
         away = loc is not None and not loc.is_home
         people.append({"name": m["name"], "away": loc.label if away else None,
                        "has_timetable": bool(mine_c),

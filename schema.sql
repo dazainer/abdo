@@ -266,3 +266,15 @@ CREATE TABLE bus_trips (
     routes      TEXT[] NOT NULL DEFAULT '{}',
     position    INTEGER NOT NULL DEFAULT 0
 );
+
+-- Days a member's classes don't meet (reading week, holidays). Inclusive range.
+CREATE TABLE class_breaks (
+    id          SERIAL PRIMARY KEY,
+    member_id   INTEGER NOT NULL REFERENCES members(id),
+    starts_on   DATE NOT NULL,
+    ends_on     DATE NOT NULL,
+    label       TEXT NOT NULL DEFAULT 'Break',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (ends_on >= starts_on)
+);
+CREATE INDEX idx_class_breaks_member ON class_breaks (member_id, ends_on);

@@ -535,7 +535,34 @@ def _class_out(c) -> dict:
 
 @router.get("/schedule")
 async def schedule(member=Depends(current_member)):
-    return {"classes": [_class_out(c) for c in await db.classes_for(member["id"])]}
+    today = datetime.now(ZoneInfo(settings.timezone)).date()
+    return {"classes": [_class_out(c) for c in await db.classes_for(member["id"])],
+            "breaks": [{"id": r["id"], "label": r["label"], "starts_on": r["starts_on"].isoformat(),
+                        "ends_on": r["ends_on"].isoformat()}
+                       for r in await db.class_breaks(member["id"], since=today)]}
+
+
+class BreakIn(BaseModel):
+    starts_on: date
+    ends_on: date
+    label: str = Field(default="Break", max_length=60)
+
+
+@router.post("/schedule/breaks", dependencies=[Depends(same_origin)])
+async def add_break(body: BreakIn, member=Depends(current_member)):
+    if body.ends_on < body.starts_on:
+        raise HTTPException(400, "the last day is before the first")
+    if (body.ends_on - body.starts_on).days > 120:
+        raise HTTPException(400, "that's longer than a term")
+    bid = await db.add_class_break(member["id"], body.starts_on, body.ends_on, body.label.strip() or "Break")
+    return {"id": bid}
+
+
+@router.delete("/schedule/breaks/{break_id}", dependencies=[Depends(same_origin)])
+async def delete_break(break_id: int, member=Depends(current_member)):
+    if not await db.delete_class_break(break_id, member["id"]):
+        raise HTTPException(404, "no such break")
+    return {"ok": True}
 
 
 @router.post("/schedule/parse", dependencies=[Depends(same_origin)])

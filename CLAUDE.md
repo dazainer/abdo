@@ -147,12 +147,24 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   parse it; the whole app goes blank).
 - **Design system** (Impeccable): `PRODUCT.md` is the product brief, the Today surface brief and
   direction contract live in `.impeccable/surfaces/`. Today is the home screen (`/`; `/today`
-  redirects for old notification links); chat is `/chat`; buses are their own screen
-  (`/buses`, from the bus button on Today), never stops on the line. Dark theme only. Every fact
+  redirects for old notification links); chat is `/chat`; buses (`/buses`) and the calendar
+  (`/calendar`, five weeks at a glance) are their own screens, from the buttons beside Today's
+  sign, never stops on the line. Dark theme only. Every fact
   appears once on Today: today's things are stops on the line, later things are under "Coming
   up". Greetings come from `briefing.greeting()` (the suite's own phrases, weekday/weekend and
   morning/evening, fixed per person per half-day). Prayer names are MSA (الظهر، العشاء), not
   dialect.
+- **A message in flight lives outside the Chat screen** (`web/src/lib/chatSend.ts`): switching
+  tabs mid-send used to drop the pending bubble while the server kept answering, so a "yes" got
+  sent three times and a confirmed event was booked three times. Keep sends in that store. And
+  `calendar_svc.create_event` returns an existing event with the same title and start
+  (`"existing": True`) instead of booking it twice.
+- **Spoken replies keep the audio context alive**: `unlockAudio()` starts a silent looping
+  source (stopped when the reply plays, or after 2 min) so a slow reply can still autoplay on
+  iOS. iOS still won't play if the app was backgrounded or the phone locked meanwhile.
+- **Class breaks** (`class_breaks`, `pause_classes` tool, Classes screen): whole days a member's
+  classes don't meet; `timetable.busy_on(..., breaks)` skips them; exams still count. The
+  timetable itself only changes by re-importing from Quest.
 - **Today opens from a snapshot** (`web/src/lib/snapshot.ts`): the last me/today/briefing/
   exams/calendar answers are kept in localStorage and shown at once, then refetched. A 401
   always wins over the saved "me", and logout clears it. The briefing also runs its calendar

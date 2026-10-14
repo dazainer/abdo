@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, type ProposedClass, type ProposedExam, type SavedClass } from "../api";
+import { api, ApiError, type ClassBreak, type ProposedClass, type ProposedExam, type SavedClass } from "../api";
 import { relativeDay, termLabel } from "../lib/dates";
 import { Sign } from "../components/Sign";
 
@@ -27,6 +27,7 @@ export function Schedule({ toast }: { toast: (msg: string) => void }) {
         ) : (
           <>
             <Week classes={classes} />
+            <Breaks breaks={q.data?.breaks ?? []} toast={toast} />
             <button className="btn btn-quiet" style={{ marginTop: 14 }} onClick={() => setImporting(true)}>
               Update from Quest
             </button>
@@ -57,6 +58,76 @@ function Week({ classes }: { classes: SavedClass[] }) {
           </ul>
         </div>
       ))}
+    </section>
+  );
+}
+
+// Days your classes don't meet (reading week, a holiday). Abdo can add these too.
+function Breaks({ breaks, toast }: { breaks: ClassBreak[]; toast: (msg: string) => void }) {
+  const qc = useQueryClient();
+  const [adding, setAdding] = useState(false);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [label, setLabel] = useState("Reading week");
+
+  async function refresh() {
+    await qc.invalidateQueries({ queryKey: ["schedule"] });
+    await qc.invalidateQueries({ queryKey: ["today"] });
+    await qc.invalidateQueries({ queryKey: ["briefing"] });
+  }
+  async function add(e: FormEvent) {
+    e.preventDefault();
+    try {
+      await api.addBreak({ starts_on: from, ends_on: to || from, label: label.trim() || "Break" });
+      setAdding(false); setFrom(""); setTo("");
+      await refresh();
+    } catch (err) {
+      toast(errorText(err, "Couldn't add the break."));
+    }
+  }
+  async function remove(id: number) {
+    try {
+      await api.deleteBreak(id);
+      await refresh();
+    } catch (err) {
+      toast(errorText(err, "Couldn't remove it."));
+    }
+  }
+
+  return (
+    <section className="section panel" aria-labelledby="breaks">
+      <h2 className="section-title" id="breaks">Breaks</h2>
+      {breaks.length === 0 && !adding && <p className="empty">No breaks coming up.</p>}
+      <ul className="rows">
+        {breaks.map((b) => (
+          <li className="row" key={b.id}>
+            <span className="row-main">
+              <span className="row-title">{b.label}</span>
+              <span className="row-meta">
+                {b.starts_on === b.ends_on ? relativeDay(b.starts_on) : `${relativeDay(b.starts_on)} to ${relativeDay(b.ends_on)}`}. No classes, exams still count.
+              </span>
+            </span>
+            <button className="btn btn-quiet btn-small" onClick={() => void remove(b.id)}>Remove</button>
+          </li>
+        ))}
+      </ul>
+      {adding ? (
+        <form onSubmit={add} className="stack-form">
+          <input className="field" value={label} onChange={(e) => setLabel(e.target.value)} aria-label="Name" maxLength={60} />
+          <div className="term-row">
+            <label className="row-meta" htmlFor="bf">First day off</label>
+            <label className="row-meta" htmlFor="bt">Last day off</label>
+            <input id="bf" className="field" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+            <input id="bt" className="field" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} />
+          </div>
+          <div className="inline-form">
+            <button className="btn" disabled={!from}>Add break</button>
+            <button type="button" className="btn btn-quiet" onClick={() => setAdding(false)}>Cancel</button>
+          </div>
+        </form>
+      ) : (
+        <button className="btn btn-quiet section-action" onClick={() => setAdding(true)}>Add a break</button>
+      )}
     </section>
   );
 }

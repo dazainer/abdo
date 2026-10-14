@@ -795,16 +795,22 @@ input[type="checkbox"] { accent-color: var(--plate); }
 /* ---- screen head: an action beside the sign -------------------------------------- */
 
 .screen-head { position: relative; }
-.head-action, .head-back {
+.head-actions {
   position: absolute;
   top: calc(26px + var(--safe-t));
+  right: 12px;
+  display: flex;
+  gap: 6px;
+}
+.head-action, .head-back {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 44px; height: 44px;
   border-radius: 12px;
   color: var(--text);
   text-decoration: none;
 }
-.head-action { right: 12px; border: 1px solid var(--line); background: var(--surface); }
+.head-action { border: 1px solid var(--line); background: var(--surface); }
+.head-back { position: absolute; top: calc(26px + var(--safe-t)); }
 .head-action svg { width: 22px; height: 22px; }
 .head-back { left: 8px; padding: 0 10px; font-size: var(--t-small); font-weight: 600; color: var(--text-soft); }
 
@@ -838,3 +844,25 @@ input[type="checkbox"] { accent-color: var(--plate); }
 /* ---- money: payments read as transfers, not purchases ----------------------------- */
 
 .payment-amount { color: var(--text-soft); }
+
+/* ---- calendar: five weeks at a glance --------------------------------------------- */
+
+.month { margin-top: 12px; padding: 10px 8px 8px; }
+.month-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.month-wd { text-align: center; font-size: 0.6875rem; font-weight: 600; color: var(--text-soft); padding-bottom: 4px; }
+.month-day {
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 3px;
+  min-height: 46px; padding: 6px 0 4px;
+  border: 0; border-radius: 10px; background: transparent;
+  font-family: var(--font-sign); font-weight: 600; font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.month-day.is-past { color: var(--text-soft); opacity: 0.6; }
+.month-day.is-today .month-num { color: var(--gold); }
+.month-day.is-picked { background: var(--plate); color: var(--plate-text); opacity: 1; }
+.month-day.is-picked .month-num { color: inherit; }
+.month-num { font-size: var(--t-small); line-height: 1.2; }
+.month-dots { display: flex; gap: 3px; height: 6px; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text); }
+.dot-exam { background: var(--gold); }
+.exam-who { color: var(--gold); font-weight: 600; }

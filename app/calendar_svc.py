@@ -194,6 +194,24 @@ def create_event(summary: str, day: str, time: str, end_time: str | None = None,
         end = _compose(d, end_time)
     else:
         end = (datetime.fromisoformat(start) + timedelta(hours=1)).isoformat()
+    # Never add the same event twice. A confirmation sent again (a retry, or "yes" said
+    # twice while the first reply was still on its way) must not double-book: if an event
+    # with this title already starts at this time, hand that one back instead.
+    zone = ZoneInfo(tz)
+    s_local = datetime.fromisoformat(start).replace(tzinfo=zone)
+    try:
+        same_time = service.events().list(
+            calendarId=settings.google_calendar_id,
+            timeMin=s_local.isoformat(), timeMax=(s_local + timedelta(minutes=1)).isoformat(),
+            singleEvents=True, maxResults=50,
+        ).execute().get("items", [])
+    except Exception as e:
+        raise CalendarReadError(str(e)) from e
+    for e in same_time:
+        e_start = e.get("start", {}).get("dateTime")
+        if (e.get("summary") or "").strip().casefold() == summary.strip().casefold() and e_start \
+                and datetime.fromisoformat(e_start).astimezone(zone) == s_local:
+            return {"id": e["id"], "summary": e.get("summary"), "start": e_start, "existing": True}
     body = {
         "summary": summary,
         "start": {"dateTime": start, "timeZone": tz},

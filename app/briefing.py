@@ -207,7 +207,8 @@ async def gather(member, now: datetime | None = None) -> dict:
 
     from app import timetable
     day_start = datetime.combine(today, datetime.min.time(), tz)
-    my_classes = timetable.busy_on(today, await db.classes_for(member["id"]), [], tz)
+    my_classes = timetable.busy_on(today, await db.classes_for(member["id"]), [], tz,
+                                   await db.class_breaks(member["id"], since=today))
     upcoming = await db.exams_between(day_start, day_start + timedelta(days=8))
 
     def exam_out(e):

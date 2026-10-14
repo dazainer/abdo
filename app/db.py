@@ -758,3 +758,31 @@ async def bus_trips():
         return await con.fetch(
             "SELECT id, name, from_stops, to_stops, routes FROM bus_trips ORDER BY position, id"
         )
+
+
+# --- Class breaks (reading week etc.) ---------------------------------------------
+async def add_class_break(member_id: int, starts_on, ends_on, label: str) -> int:
+    async with _pool.acquire() as con:
+        return await con.fetchval(
+            "INSERT INTO class_breaks (member_id, starts_on, ends_on, label) VALUES ($1, $2, $3, $4) RETURNING id",
+            member_id, starts_on, ends_on, label,
+        )
+
+
+async def class_breaks(member_id: int | None = None, since=None):
+    """Breaks (one member's, or everyone's) that haven't ended before `since`."""
+    async with _pool.acquire() as con:
+        return await con.fetch(
+            "SELECT id, member_id, starts_on, ends_on, label FROM class_breaks "
+            "WHERE ($1::int IS NULL OR member_id = $1) AND ($2::date IS NULL OR ends_on >= $2) "
+            "ORDER BY starts_on, id",
+            member_id, since,
+        )
+
+
+async def delete_class_break(break_id: int, member_id: int) -> bool:
+    """Only the member's own break."""
+    async with _pool.acquire() as con:
+        return await con.fetchval(
+            "DELETE FROM class_breaks WHERE id = $1 AND member_id = $2 RETURNING true", break_id, member_id,
+        ) or False

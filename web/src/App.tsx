@@ -12,6 +12,7 @@ import { Money } from "./pages/Money";
 import { Schedule } from "./pages/Schedule";
 import { Settings } from "./pages/Settings";
 import { Buses } from "./pages/Buses";
+import { Calendar } from "./pages/Calendar";
 
 function useToast() {
   const [message, setMessage] = useState<string | null>(null);
@@ -79,9 +80,9 @@ export function App() {
             <Route path="/" element={<Today me={member} toast={toast.show} />} />
             <Route path="/chat" element={<Chat me={member} toast={toast.show} />} />
             <Route path="/lists" element={<Lists toast={toast.show} />} />
-            {/* Notifications link to /today and /calendar; Today is the home screen now. */}
+            {/* Notifications link to /today; Today is the home screen now. */}
             <Route path="/today" element={<Navigate to="/" replace />} />
-            <Route path="/calendar" element={<Navigate to="/" replace />} />
+            <Route path="/calendar" element={<Calendar />} />
             <Route path="/money" element={<Money toast={toast.show} />} />
             <Route path="/buses" element={<Buses />} />
             <Route path="/schedule" element={<Schedule toast={toast.show} />} />

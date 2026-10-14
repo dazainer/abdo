@@ -21,7 +21,10 @@ export function Today({ me, toast }: { me: Member; toast: (msg: string) => void 
     <div className="page">
       <header className="screen-head">
         <Sign ar="النهاردة" en="Today" />
-        <Link to="/buses" className="head-action" aria-label="Buses"><Icon name="bus" /></Link>
+        <nav className="head-actions" aria-label="More">
+          <Link to="/calendar" className="head-action" aria-label="Calendar"><Icon name="calendar" /></Link>
+          <Link to="/buses" className="head-action" aria-label="Buses"><Icon name="bus" /></Link>
+        </nav>
       </header>
       <main className="screen">
         <BriefingPlate q={brief} />

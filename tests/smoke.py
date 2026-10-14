@@ -59,6 +59,7 @@ class FakeDB:
         self.exams = []
         self.pantry = []
         self.bus = []                # saved bus trips (dicts shaped like the bus_trips rows)
+        self.breaks = []             # class breaks
         self.polls = []
         self.votes = []
 
@@ -262,6 +263,21 @@ class FakeDB:
         return sorted([c for c in self.classes if member_id is None or c["member_id"] == member_id],
                       key=lambda c: (c["member_id"], c["weekday"], c["starts"]))
 
+    async def add_class_break(self, member_id, starts_on, ends_on, label):
+        self._brk_seq = getattr(self, "_brk_seq", 0) + 1
+        self.breaks.append({"id": self._brk_seq, "member_id": member_id, "starts_on": starts_on,
+                            "ends_on": ends_on, "label": label})
+        return self._brk_seq
+
+    async def class_breaks(self, member_id=None, since=None):
+        return [b for b in self.breaks if (member_id is None or b["member_id"] == member_id)
+                and (since is None or b["ends_on"] >= since)]
+
+    async def delete_class_break(self, break_id, member_id):
+        before = len(self.breaks)
+        self.breaks = [b for b in self.breaks if not (b["id"] == break_id and b["member_id"] == member_id)]
+        return len(self.breaks) < before
+
     async def add_exam(self, member_id, course, kind, starts_at, ends_at, room, created_by):
         self._exam_seq = getattr(self, "_exam_seq", 0) + 1
         self.exams.append({"id": self._exam_seq, "member_id": member_id, "name": NAMES[member_id],
@@ -453,7 +469,7 @@ for _name in ("get_member_by_telegram_id", "roster_string", "get_member_id_by_na
               "search_facts", "upsert_location", "get_location", "get_all_locations",
               "add_shopping_item", "get_shopping_list", "mark_item_bought",
               "clear_shopping_list", "add_package", "get_open_packages",
-              "update_package_status", "bus_trips"):
+              "update_package_status", "bus_trips", "add_class_break", "class_breaks", "delete_class_break"):
     setattr(db, _name, getattr(fake, _name))
 
 
@@ -507,6 +523,7 @@ def fake_delete_event(event_id):
     _deleted_events.append(event_id)
 
 
+_real_create_event = calendar_svc.create_event   # the dedupe test uses the real one
 calendar_svc.create_event = fake_create_event
 calendar_svc.update_event = fake_update_event
 calendar_svc.delete_event = fake_delete_event
@@ -1845,6 +1862,48 @@ async def test_scheduler():
             m.pop("prefs", None)
 
 
+def test_calendar_no_duplicates():
+    print("Scenario: creating the same event twice hands back the first one")
+    store = []
+
+    class Req:
+        def __init__(self, fn):
+            self.fn = fn
+
+        def execute(self):
+            return self.fn()
+
+    class Events:
+        def list(self, **kw):
+            return Req(lambda: {"items": [e for e in store if kw["timeMin"] <= e["start"]["dateTime"] < kw["timeMax"]]})
+
+        def insert(self, calendarId, body):
+            def go():
+                ev = {"id": f"ev{len(store) + 1}", "summary": body["summary"],
+                      "start": {"dateTime": body["start"]["dateTime"] + "-04:00"}}
+                store.append(ev)
+                return ev
+            return Req(go)
+
+    class Service:
+        def events(self):
+            return Events()
+
+    real = calendar_svc._get_service
+    calendar_svc._get_service = lambda: Service()
+    try:
+        now = datetime(2026, 10, 14, 9, 0, tzinfo=TZ)
+        a = _real_create_event("Suite dinner", "Friday", "19:00", now=now)
+        b = _real_create_event("suite dinner ", "Friday", "19:00", now=now)
+        c = _real_create_event("Suite dinner", "Friday", "20:00", now=now)
+        check("first create adds it", not a.get("existing") and len(store) >= 1)
+        check("same title + same start: the existing event comes back, nothing added",
+              b.get("existing") is True and b["id"] == a["id"])
+        check("a different time is a different event", not c.get("existing") and len(store) == 2)
+    finally:
+        calendar_svc._get_service = real
+
+
 async def test_calendar_view_cache():
     print("Scenario: the app's calendar reads are cached for a minute; Abdo's never are")
     global _fake_events
@@ -2389,6 +2448,26 @@ async def test_who_is_free_and_exams():
           {"from": "17:00", "to": "19:00"} in f["together"] and "away (in Montreal, Canada)" in timetable.describe_free(f))
     fake.statuses = {}
 
+    out = await tools.run_tool("pause_classes", {"from_day": "2026-10-12", "to_day": "2026-10-16",
+                                                 "label": "Reading week"}, member_id=1)
+    check("pause_classes: a break for the speaker", out.startswith("Break #") and "Reading week" in out)
+    f = await timetable.who_is_free(wed, dtime(17), dtime(23), now=datetime(2026, 10, 14, 9, 0, tzinfo=TZ))
+    zain = next(p for p in f["people"] if p["name"] == "Zain")
+    check("during a break, that member's classes don't count, but exams still do",
+          not any("LEC" in b["what"] for b in zain["busy"]) and any("midterm" in b["what"] for b in zain["busy"]))
+    out = await tools.run_tool("get_schedule", {"day": "2026-10-16"}, member_id=1)
+    check("get_schedule says the day is off", "No classes on Friday 16 October (Reading week)" in out)
+    out = await tools.run_tool("get_schedule", {"name": "Mo", "day": "2026-10-14"}, member_id=1)
+    check("someone else's classes are untouched", "CS 246 LAB" in out)
+    check("a break can't end before it starts",
+          (await tools.run_tool("pause_classes", {"from_day": "2026-10-16", "to_day": "2026-10-12"}, member_id=1)).startswith("ERROR"))
+    bid = fake.breaks[0]["id"]
+    check("only your own break can be removed",
+          (await tools.run_tool("resume_classes", {"break_id": bid}, member_id=2)).startswith("ERROR"))
+    out = await tools.run_tool("resume_classes", {"break_id": bid}, member_id=1)
+    check("resume_classes brings them back", out.startswith("Removed break") and not fake.breaks)
+    fake.statuses = {}
+
     out = await tools.run_tool("add_exam", {"course": "cs 246", "kind": "midterm", "day": "tomorrow",
                                             "time": "19:00", "end_time": "21:00", "room": "M3 1006"}, member_id=2)
     check("add exam resolves the day in code", out.startswith("Added exam #") and "CS 246 midterm" in out)
@@ -2476,6 +2555,14 @@ def test_web_schedule():
         t = c.get("/api/today").json()
         check("today includes free-together data", "together" in t["free"] and "no_timetable" in t["free"])
 
+        r = c.post("/api/schedule/breaks", json={"starts_on": "2099-10-12", "ends_on": "2099-10-16", "label": "Reading week"}, headers=H)
+        check("add a class break from the app", r.status_code == 200)
+        brk = c.get("/api/schedule").json()["breaks"]
+        check("breaks come back with the schedule", [b["label"] for b in brk] == ["Reading week"])
+        check("a backwards break is refused",
+              c.post("/api/schedule/breaks", json={"starts_on": "2099-10-16", "ends_on": "2099-10-12"}, headers=H).status_code == 400)
+        check("remove it", c.delete(f"/api/schedule/breaks/{brk[0]['id']}", headers=H).status_code == 200
+              and c.get("/api/schedule").json()["breaks"] == [])
     finally:
         telegram.send_message = real_send
         settings.session_pepper = None
@@ -2850,6 +2937,7 @@ async def main():
     await test_scheduler()
     test_weather_hours()
     await test_calendar_view_cache()
+    test_calendar_no_duplicates()
     await test_briefing_build()
     test_money_math()
     await test_money_tools()

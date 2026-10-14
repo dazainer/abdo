@@ -446,6 +446,34 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {"exam_id": {"type": "integer"}}, "required": ["exam_id"]},
     },
     {
+        "name": "pause_classes",
+        "description": (
+            "The speaker's classes don't meet for a stretch of days (reading week, a holiday, "
+            "'skip my lectures this week'): every class from from_day to to_day (inclusive) is "
+            "dropped from their schedule, free-time answers and briefing. Exams still count. Whole "
+            "days only. Pass the days as said or as exact dates from the date reference."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "from_day": {"type": "string"},
+                "to_day": {"type": "string", "description": "Last day off; omit for a single day."},
+                "label": {"type": "string", "description": "e.g. 'Reading week'."},
+            },
+            "required": ["from_day"],
+        },
+    },
+    {
+        "name": "list_class_breaks",
+        "description": "The speaker's class breaks that haven't ended yet, with ids.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "resume_classes",
+        "description": "Remove one of the speaker's class breaks by id (from list_class_breaks), so those classes count again.",
+        "input_schema": {"type": "object", "properties": {"break_id": {"type": "integer"}}, "required": ["break_id"]},
+    },
+    {
         "name": "add_to_fridge",
         "description": (
             "Note something in the fridge/cupboard, optionally with when it expires, e.g. 'we bought "
@@ -789,8 +817,12 @@ async def _schedule_tool(name: str, tool_input: dict, member_id: int | None) -> 
             day = day_of(tool_input.get("day"))
             start = datetime.combine(day, datetime.min.time(), tz)
             classes = await db.classes_for(who)
-            busy = timetable.busy_on(day, classes, await db.exams_between(start, start + timedelta(days=1), who), tz)
+            breaks = await db.class_breaks(who, since=day)
+            busy = timetable.busy_on(day, classes, await db.exams_between(start, start + timedelta(days=1), who), tz, breaks)
             label = day.strftime("%A %d %B")
+            off = timetable.on_break(day, who, breaks)
+            if off and not busy:
+                return f"No classes on {label} ({off['label']})."
             if not classes and not busy:
                 return f"No timetable on file and nothing scheduled for {label}."
             if not busy:
@@ -833,6 +865,33 @@ async def _schedule_tool(name: str, tool_input: dict, member_id: int | None) -> 
                 return "No exams in the next 30 days."
             return "\n".join(f"- #{r['id']} {r['name']}: {r['course']} {r['kind']}, {_when(r['starts_at'])}"
                              + (f", {r['room']}" if r["room"] else "") for r in rows)
+
+        if name == "pause_classes":
+            if member_id is None:
+                return "ERROR: couldn't tell whose classes. Ask the user."
+            first = day_of(tool_input["from_day"])
+            last = day_of(tool_input["to_day"]) if tool_input.get("to_day") else first
+            if last < first:
+                return "ERROR: the last day is before the first. Ask the user which days."
+            if (last - first).days > 120:
+                return "ERROR: that's longer than a term. Ask the user which days."
+            label = (tool_input.get("label") or "Break").strip()[:60] or "Break"
+            bid = await db.add_class_break(member_id, first, last, label)
+            span = first.strftime("%A %d %B") + ("" if last == first else f" to {last.strftime('%A %d %B')}")
+            return f"Break #{bid} ({label}): no classes {span}. Exams still count."
+
+        if name == "list_class_breaks":
+            rows = await db.class_breaks(member_id, since=datetime.now(tz).date())
+            if not rows:
+                return "No class breaks coming up."
+            return "\n".join(f"- #{r['id']} {r['label']}: {r['starts_on'].strftime('%a %d %b')} to "
+                             f"{r['ends_on'].strftime('%a %d %b')}" for r in rows)
+
+        if name == "resume_classes":
+            if not await db.delete_class_break(tool_input["break_id"], member_id):
+                return (f"ERROR: no break #{tool_input['break_id']} for this person. Do NOT claim it was "
+                        f"removed; call list_class_breaks for real ids.")
+            return f"Removed break #{tool_input['break_id']}; those classes count again."
 
         if name == "delete_exam":
             course = await db.delete_exam(tool_input["exam_id"], member_id)
@@ -1060,12 +1119,20 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
     if name == "create_event":
         if not calendar_svc.is_configured():
             return "The shared calendar isn't connected yet."
-        ev = await asyncio.to_thread(
-            calendar_svc.create_event,
-            tool_input["summary"], tool_input["day"], tool_input["time"],
-            tool_input.get("end_time"),
-        )
+        try:
+            ev = await asyncio.to_thread(
+                calendar_svc.create_event,
+                tool_input["summary"], tool_input["day"], tool_input["time"],
+                tool_input.get("end_time"),
+            )
+        except calendar_svc.CalendarReadError as e:
+            log.warning("create_event failed: %s", e)
+            return ("ERROR: couldn't reach the calendar to add that right now. Tell the user to "
+                    "try again in a moment; do NOT claim it was added.")
         invalidate_calendar_cache()
+        if ev.get("existing"):
+            return (f"Already on the calendar: {ev['start']} {ev['summary']} (id: {ev['id']}). "
+                    f"Not added again; tell the user it's already there.")
         return f"Created: {ev['start']} {ev['summary']} (id: {ev['id']})."
 
     if name == "update_event":
@@ -1287,7 +1354,8 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
     if name in ("add_expense", "get_balances", "record_payment", "list_expenses", "delete_expense"):
         return await _money_tool(name, tool_input, member_id)
 
-    if name in ("who_is_free", "get_schedule", "add_exam", "list_exams", "delete_exam"):
+    if name in ("who_is_free", "get_schedule", "add_exam", "list_exams", "delete_exam",
+                "pause_classes", "list_class_breaks", "resume_classes"):
         return await _schedule_tool(name, tool_input, member_id)
 
     if name in ("add_to_fridge", "list_fridge", "fridge_item_done", "going_shopping"):

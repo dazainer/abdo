@@ -105,6 +105,13 @@ export interface SavedClass {
   term_end: string;
 }
 
+export interface ClassBreak {
+  id: number;
+  label: string;
+  starts_on: string;
+  ends_on: string;
+}
+
 export interface Exam {
   id: number;
   member_id: number;
@@ -330,7 +337,10 @@ export const api = {
   prefs: () => request<{ prefs: Prefs }>("GET", "/api/me/prefs"),
   updatePrefs: (p: Partial<Prefs>) => request<{ prefs: Prefs }>("PATCH", "/api/me/prefs", p),
 
-  schedule: () => request<{ classes: SavedClass[] }>("GET", "/api/schedule"),
+  schedule: () => request<{ classes: SavedClass[]; breaks: ClassBreak[] }>("GET", "/api/schedule"),
+  addBreak: (b: { starts_on: string; ends_on: string; label: string }) =>
+    request<{ id: number }>("POST", "/api/schedule/breaks", b),
+  deleteBreak: (id: number) => request<{ ok: true }>("DELETE", `/api/schedule/breaks/${id}`),
   parseSchedule: (text: string) =>
     request<{ classes: ProposedClass[]; exams: ProposedExam[]; term_start: string; term_end: string; skipped: string[] }>(
       "POST", "/api/schedule/parse", { text }),

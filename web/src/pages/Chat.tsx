@@ -4,10 +4,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type ChatMessage, type Member } from "../api";
 import { Sign } from "../components/Sign";
 import { Icon } from "../components/Icon";
-import { canRecord, playMp3, prepareToRecord, Recorder, rememberSpoken, spokenAudio, unlockAudio, type Recording } from "../lib/recorder";
+import { canRecord, playMp3, prepareToRecord, Recorder, spokenAudio, unlockAudio, type Recording } from "../lib/recorder";
+import { sendText as send, sendVoice as sendVoiceNote, usePending, useSpokenVersion } from "../lib/chatSend";
 import { clock, dayOf, relativeDay } from "../lib/dates";
-
-type Pending = { kind: "text"; text: string } | { kind: "voice" };
 
 export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }) {
   const qc = useQueryClient();
@@ -19,10 +18,10 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
   });
   const [older, setOlder] = useState<ChatMessage[]>([]);
   const [olderHasMore, setOlderHasMore] = useState<boolean | null>(null);
-  const [pending, setPending] = useState<Pending | null>(null);
+  const pending = usePending();       // survives switching tabs (lib/chatSend)
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
-  const [, setSpokenVersion] = useState(0); // re-render when a reply gains audio
+  useSpokenVersion();                 // re-render when a reply gains audio
 
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -69,37 +68,11 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
     if (!value || pending) return;
     setText("");
     if (inputRef.current) inputRef.current.style.height = ""; // shrink back to one line
-    setPending({ kind: "text", text: value });
-    try {
-      await api.chat(value);
-      await qc.invalidateQueries({ queryKey: ["history"] });
-    } catch (err) {
-      setText(value); // give the message back so nothing is lost
-      toast(err instanceof ApiError ? err.message : "Couldn't reach Abdo. Try again.");
-    } finally {
-      setPending(null);
-    }
+    if (!(await send(qc, value, toast))) setText(value); // give it back so nothing is lost
   }
 
-  async function sendVoice(rec: Recording) {
-    setPending({ kind: "voice" });
-    try {
-      const res = await api.voice(rec.blob, rec.filename);
-      await qc.invalidateQueries({ queryKey: ["history"] });
-      if (!res.transcript) {
-        toast(res.reply);
-        return;
-      }
-      if (res.audio) {
-        rememberSpoken(res.reply, res.audio);
-        setSpokenVersion((v) => v + 1);
-        if (!(await playMp3(res.audio))) toast("Tap Play to hear Abdo's reply.");
-      }
-    } catch (err) {
-      toast(err instanceof ApiError ? err.message : "Couldn't send the voice note. Try again.");
-    } finally {
-      setPending(null);
-    }
+  function sendVoice(rec: Recording) {
+    void sendVoiceNote(qc, rec, toast);
   }
 
   // ---- hold to talk ---------------------------------------------------------
