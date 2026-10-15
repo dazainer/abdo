@@ -2987,6 +2987,12 @@ def test_tts_model_routing():
     check("bullet lines become one sentence", flow_lists("هتحتاج:\n- فرخة\n- ملوخية\n- توم\n") == "هتحتاج:\nفرخة وملوخية وتوم.\n")
     check("for_speech does both", for_speech("هتحتاج: 2 فرخة، ملوخية، توم") == "هتحتاج: اتنين فرخة وملوخية وتوم")
 
+    print("Scenario: a few words get their Egyptian pronunciation")
+    from app.speak import egyptian_words
+    check("roz, samna, basala, with prefixes and before punctuation",
+          egyptian_words("رز، والسمن وبصلة، بالرز") == "رُزّ، والسَمْنة وبَصَلة، بالرُزّ")
+    check("other words that start the same are left alone", egyptian_words("رزق بصلات سمنود") == "رزق بصلات سمنود")
+
     print("Scenario: sound tags in a transcript aren't speech")
     from app.stt import clean
     check("only a breathing tag -> nothing heard", clean("[صوت تنفس].") == "")

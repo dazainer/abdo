@@ -224,6 +224,27 @@ def flow_lists(text: str) -> str:
     return _AFTER_COLON.sub(_colon_list, _BULLETS.sub(_bullet_list, text))
 
 
+# ---- Egyptian pronunciations ------------------------------------------------------------
+# Words the voice reads the MSA way unless it's shown the vowels (or the Egyptian word).
+# Matched as whole words, with the usual prefixes (و، ف، ب، ل، ك، ال) kept. Add to this
+# list when someone hears a word come out wrong.
+_SAY_AS = {
+    "رز": "رُزّ",          # roz, not riz
+    "سمن": "سَمْنة",       # Egyptian samna
+    "سمنة": "سَمْنة",
+    "بصل": "بَصَل",
+    "بصلة": "بَصَلة",       # basala, not bosla
+}
+_AR = "\u0621-\u064A\u064B-\u0652\u066E-\u06D3"   # Arabic letters and vowel marks, not punctuation (،)
+_SAY_AS_RE = re.compile(
+    rf"(?<![{_AR}])((?:و|ف)?(?:ب|ل|ك)?(?:ال)?)({'|'.join(sorted(map(re.escape, _SAY_AS), key=len, reverse=True))})(?![{_AR}])")
+
+
+def egyptian_words(text: str) -> str:
+    return _SAY_AS_RE.sub(lambda m: m.group(1) + _SAY_AS[m.group(2)], text)
+
+
 def for_speech(text: str) -> str:
-    """Everything done to a reply before it's spoken: lists flow, numbers become words."""
-    return normalize(flow_lists(text))
+    """Everything done to a reply before it's spoken: lists flow, numbers become words, and a
+    few words get their Egyptian pronunciation."""
+    return egyptian_words(normalize(flow_lists(text)))

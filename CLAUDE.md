@@ -128,7 +128,9 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   Egyptian words (or English, by the surrounding text), money stays exact, times read the
   Egyptian way ("سبعة ونص"), long digit strings are read one by one. Lists are joined into one
   sentence with و first (`speak.flow_lists`, only after a colon or as bullets): a comma list of
-  bare words makes the voice drop its Egyptian accent for Gulf/MSA. STT asks Scribe for no
+  bare words makes the voice drop its Egyptian accent for Gulf/MSA. Words it mispronounces get
+  vowel marks or their Egyptian form in `speak._SAY_AS` (رُزّ، سَمْنة، بَصَلة): add to that map
+  when someone hears a word come out wrong. Voice stability is 0.75 (accent holds better). STT asks Scribe for no
   audio-event tags and `stt.clean()` drops any left ("[صوت تنفس]" once reached Abdo as a
   message); a tags-only recording counts as nothing heard. ElevenLabs is the biggest running cost: prefer pre-recorded clips and the
   TTS cache (Phase 8) over new synthesis.

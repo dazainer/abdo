@@ -18,9 +18,10 @@ from app import speak
 from app.config import settings
 
 
-# Steadier delivery for a clear Cairene pace. speed ranges 0.7–1.2 (default 1.0);
+# Steadier delivery for a clear Cairene pace. Stability 0.75 (was 0.55) keeps the Egyptian
+# accent from drifting toward Gulf/MSA on short phrases (A/B-tested by ear, 2026-10-15). speed ranges 0.7–1.2 (default 1.0);
 # 1.0 is a natural conversational pace (~12% quicker than the earlier 0.9).
-_VOICE_SETTINGS = {"stability": 0.55, "similarity_boost": 0.75, "speed": 1.0}
+_VOICE_SETTINGS = {"stability": 0.75, "similarity_boost": 0.75, "speed": 1.0}
 
 # Flash v2.5 deliberately skips number normalization, so digit strings ("2013",
 # phone numbers, amounts) come out wrong. The voice-mode prompt writes ordinary
