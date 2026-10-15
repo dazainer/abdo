@@ -2,8 +2,8 @@ from math import radians, sin, cos, asin, sqrt
 from app.config import settings
 
 # Geofence radius around home (km). A residence complex spans several buildings —
-# tune to the footprint so "home" means anywhere on the property.
-HOME_RADIUS_KM = 0.2
+# tune to the footprint so "home" means anywhere on the property (100 m covers the suite's building).
+HOME_RADIUS_KM = 0.1
 
 
 def km_from_home(lat: float, lng: float) -> float:

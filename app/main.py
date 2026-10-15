@@ -40,7 +40,7 @@ from app.channels import web as web_channel  # noqa: E402
 
 # Bump this with each deploy-worth change. Surfaced at GET /api/health so we can
 # confirm from outside exactly which code Railway is actually running.
-VERSION = "2026-10-15-urgent-reminders"
+VERSION = "2026-10-15-geofence-100m"
 
 # The built React app (web/dist). Absent in a backend-only checkout: then GET /
 # falls back to the health JSON.
