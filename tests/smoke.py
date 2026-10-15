@@ -1306,8 +1306,8 @@ def test_telegram_webhook():
 
         sent.clear()
         r = post({"message": {"chat": {"id": 5}, "from": {"id": 999}, "text": "hi"}})
-        check("unknown sender gets the polite refusal",
-              r.status_code == 200 and sent == [(5, tg_channel.UNKNOWN_SENDER)])
+        check("unknown sender gets the polite refusal with their own id to pass on",
+              r.status_code == 200 and sent == [(5, tg_channel.UNKNOWN_SENDER.format(id=999))] and "999" in sent[0][1])
 
         sent.clear()
         fake.locations.clear()

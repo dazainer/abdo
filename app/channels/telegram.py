@@ -14,7 +14,7 @@ from app.config import settings
 log = logging.getLogger("abdo")
 router = APIRouter()
 
-UNKNOWN_SENDER = "أنا عبده 👋 مش عارفك لسه — ask Zain to add you."
+UNKNOWN_SENDER = "أنا عبده 👋 مش عارفك لسه. To join, send this number to whoever set me up: {id}"
 DIDNT_HEAR = "معلش، مسمعتش كويس — ممكن تعيد؟"
 TOO_LONG_VOICE = "الرسالة الصوتية طويلة شوية — ممكن تبعتها أقصر؟"
 
@@ -55,7 +55,10 @@ async def telegram_webhook(
 
     member = await db.get_member_by_telegram_id(parsed["from_user"]["id"])
     if not member:
-        await telegram.send_message(chat_id, UNKNOWN_SENDER)
+        # Their own Telegram id, so whoever runs Abdo can add them in one UPDATE.
+        uid = parsed["from_user"]["id"]
+        log.info("unknown Telegram sender %s (%s)", uid, parsed["from_user"].get("first_name", ""))
+        await telegram.send_message(chat_id, UNKNOWN_SENDER.format(id=uid))
         return {"ok": True}
 
     if parsed["kind"] == "location":
