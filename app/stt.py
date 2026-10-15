@@ -6,6 +6,8 @@ notes (OGG/Opus), Chrome/Android recordings (WebM/Opus), and Safari/iOS recordin
 (MP4/AAC). Code-switching into English is expected; language is set to Arabic but
 we don't hard-fail on mixed words.
 """
+import re
+
 import httpx
 
 from app.config import settings
@@ -20,8 +22,20 @@ async def transcribe(audio_bytes: bytes, filename: str = "voice.ogg",
         r = await client.post(
             ENDPOINT,
             headers={"xi-api-key": settings.elevenlabs_api_key},
-            data={"model_id": settings.stt_model, "language_code": settings.stt_language},
+            # No "(laughter)" / "[breathing]" style tags: they reached Abdo as if someone
+            # had said them (he once asked "are you okay?" about "[صوت تنفس]").
+            data={"model_id": settings.stt_model, "language_code": settings.stt_language,
+                  "tag_audio_events": "false"},
             files={"file": (filename, audio_bytes, content_type)},
         )
         r.raise_for_status()
-        return r.json().get("text", "").strip()
+        return clean(r.json().get("text", ""))
+
+
+_TAG = re.compile(r"[\[(（][^\])）]{0,40}[\])）]")
+
+
+def clean(text: str) -> str:
+    """The transcript without sound tags like "[صوت تنفس]" or "(laughs)". Only tags → ""."""
+    stripped = _TAG.sub(" ", text or "")
+    return " ".join(stripped.split()) if any(ch.isalnum() for ch in stripped) else ""

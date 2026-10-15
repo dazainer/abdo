@@ -2962,6 +2962,26 @@ def test_tts_model_routing():
     check("a reply with a digit routes to multilingual_v2",
           tts._pick_model("الساعة 7") == "eleven_multilingual_v2")
 
+    print("Scenario: numbers are spoken as words (Egyptian or English by context)")
+    from app.speak import normalize as say
+    check("Arabic-Indic digits in Arabic", say("فاضي للـ٣٠ يوم") == "فاضي للـتلاتين يوم")
+    check("compound numbers the Egyptian way", say("25 دقيقة") == "خمسة وعشرين دقيقة")
+    check("money exact, cents included", say("دفعت $12.50") == "دفعت اتناشر دولار وخمسين سنت"
+          and say("دفعت $1.75") == "دفعت دولار وخمسة وسبعين سنت")
+    check("money in an English sentence", say("you paid $2") == "you paid two dollars")
+    check("clock times, Egyptian style", say("الساعة 7:30") == "الساعة سبعة ونص"
+          and say("الساعة 12:45") == "الساعة واحدة إلا ربع" and say("الساعة 3:15 pm") == "الساعة تلاتة وربع العصر")
+    check("clock time in English", say("the bus is at 4:05 pm") == "the bus is at four oh five p m")
+    check("percent and years", say("المطر 40%") == "المطر أربعين في المية" and say("سنة 2026") == "سنة ألفين وستة وعشرين")
+    check("phone numbers and codes digit by digit", say("رقمه 0123") == "رقمه صفر، واحد، اتنين، تلاتة")
+    check("thousands", say("3000 و 1,200") == "تلات تلاف و ألف وميتين")
+    check("text without numbers is untouched", say("تمام يا زين") == "تمام يا زين")
+
+    print("Scenario: sound tags in a transcript aren't speech")
+    from app.stt import clean
+    check("only a breathing tag -> nothing heard", clean("[صوت تنفس].") == "")
+    check("tags removed from real speech", clean("عبده (يضحك) فين مو") == "عبده فين مو")
+
 
 async def main():
     await test_model_and_request_shape()

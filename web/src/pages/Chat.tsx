@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type ChatMessage, type Member } from "../api";
 import { Sign } from "../components/Sign";
 import { Icon } from "../components/Icon";
-import { canRecord, playMp3, prepareToRecord, Recorder, spokenAudio, unlockAudio, type Recording } from "../lib/recorder";
+import { canRecord, playMp3, prepareToRecord, Recorder, spokenAudio, stopAudio, unlockAudio, type Recording } from "../lib/recorder";
 import { sendText as send, sendVoice as sendVoiceNote, usePending, useSpokenVersion } from "../lib/chatSend";
 import { clock, dayOf, relativeDay } from "../lib/dates";
 
@@ -77,6 +77,7 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
 
   // ---- hold to talk ---------------------------------------------------------
   async function startRecording() {
+    stopAudio(); // talking over Abdo cuts him off, so his voice never ends up in the recording
     unlockAudio(); // inside the gesture, so the spoken reply can play later (iOS)
     prepareToRecord();
     const r = new Recorder();

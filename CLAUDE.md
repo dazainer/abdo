@@ -123,9 +123,12 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
 - **Voice is an I/O channel, not a tool**: STT produces text the same brain answers; TTS
   speaks the reply. The Egyptian accent comes from `TTS_VOICE_ID`, **not** the default Arabic
   voice (which leans Gulf/MSA). `scribe_v1` is gone; use `scribe_v2`. Flash v2.5 can't normalize
-  numbers: `tts.py` routes digit-bearing replies to `eleven_multilingual_v2`, and the voice
-  prompt writes numbers as words and spells codes out (dictation carve-out: no filler inside a
-  password/code). ElevenLabs is the biggest running cost: prefer pre-recorded clips and the
+  numbers, and the model leaves digits in spoken replies despite the voice prompt, so
+  `tts.synthesize_mp3` runs every reply through `speak.normalize()` first: digits become
+  Egyptian words (or English, by the surrounding text), money stays exact, times read the
+  Egyptian way ("سبعة ونص"), long digit strings are read one by one. STT asks Scribe for no
+  audio-event tags and `stt.clean()` drops any left ("[صوت تنفس]" once reached Abdo as a
+  message); a tags-only recording counts as nothing heard. ElevenLabs is the biggest running cost: prefer pre-recorded clips and the
   TTS cache (Phase 8) over new synthesis.
 - **`sendVoice` needs OGG/Opus; ElevenLabs returns MP3** → ffmpeg transcode (installed
   in the `Dockerfile`). An MP3 sent to `sendVoice` won't render as a voice note.
