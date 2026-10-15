@@ -29,6 +29,24 @@ interface PushPayload {
   body?: string;
   url?: string;
   silent?: boolean; // Fajr: shown without sound or vibration
+  urgent?: boolean; // an urgent reminder: stays on screen, vibrates, has a Done button
+  ack?: number | null; // the reminder a tap acknowledges (stops its repeats)
+}
+
+// Options some browsers support beyond the typed set (Android Chrome honours them; iOS ignores them).
+type RichOptions = NotificationOptions & {
+  vibrate?: number[];
+  renotify?: boolean;
+  requireInteraction?: boolean;
+  actions?: { action: string; title: string }[];
+};
+
+async function ackReminder(id: number): Promise<void> {
+  try {
+    await fetch(`/api/reminders/${id}/ack`, { method: "POST", headers: { "X-Abdo": "1" }, credentials: "include" });
+  } catch {
+    /* offline: the next message to Abdo acknowledges it anyway */
+  }
 }
 
 self.addEventListener("push", (event) => {
@@ -44,16 +62,26 @@ self.addEventListener("push", (event) => {
       icon: "/icons/icon-192.png",
       badge: "/icons/icon-192.png",
       silent: data.silent ?? false,
-      data: { url: data.url ?? "/" },
-    }),
+      data: { url: data.url ?? "/", ack: data.ack ?? null },
+      ...(data.urgent ? {
+        requireInteraction: true,
+        vibrate: [400, 150, 400, 150, 800],
+        tag: data.ack ? `reminder-${data.ack}` : undefined,
+        renotify: true,
+        actions: [{ action: "done", title: "Done" }],
+      } : {}),
+    } as RichOptions),
   );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const url: string = event.notification.data?.url ?? "/";
+  const ack: number | null = event.notification.data?.ack ?? null;
   event.waitUntil(
     (async () => {
+      if (ack) await ackReminder(ack);
+      if (event.action === "done") return; // "Done" stops the repeats without opening the app
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       for (const client of windows) {
         await client.focus();

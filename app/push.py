@@ -28,13 +28,14 @@ def _send(sub, payload: str) -> None:
 
 
 async def send_to_member(member_id: int, title: str, body: str, url: str = "/",
-                         silent: bool = False) -> int:
+                         silent: bool = False, urgent: bool = False, ack: int | None = None) -> int:
     """Push to every device the member subscribed. Returns how many deliveries the
     push service accepted. Expired subscriptions (404/410) are deleted. `silent` shows
     the notification without sound or vibration (Fajr)."""
     if not enabled():
         return 0
-    payload = json.dumps({"title": title, "body": body, "url": url, "silent": silent})
+    payload = json.dumps({"title": title, "body": body, "url": url, "silent": silent,
+                          "urgent": urgent, "ack": ack})
     sent = 0
     for sub in await db.push_subscriptions_for(member_id):
         try:

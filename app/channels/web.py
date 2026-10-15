@@ -422,6 +422,7 @@ async def today(member=Depends(current_member)):
                              for n in prayer.ORDER]}
     free = await timetable.who_is_free(datetime.now(ZoneInfo(settings.timezone)).date())
     reminders = [{"id": r["id"], "text": r["text"], "due_at": r["due_at"].isoformat(),
+                  "urgent": bool(r.get("urgent")),
                   "set_by": r["created_by_name"] if r["created_by"] not in (None, member["id"]) else None}
                  for r in await db.upcoming_reminders(member["id"])]
     return {"statuses": statuses, "prayers": prayers, "reminders": reminders,
@@ -458,6 +459,13 @@ async def set_status(body: StatusIn, member=Depends(current_member)):
 @router.delete("/status", dependencies=[Depends(same_origin)])
 async def clear_status(member=Depends(current_member)):
     await db.clear_status(member["id"])
+    return {"ok": True}
+
+
+@router.post("/reminders/{reminder_id}/ack", dependencies=[Depends(same_origin)])
+async def ack_reminder(reminder_id: int, member=Depends(current_member)):
+    """Tapping an urgent reminder's notification: stop its repeats."""
+    await db.ack_reminders(member["id"], reminder_id)
     return {"ok": True}
 
 

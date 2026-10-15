@@ -62,7 +62,9 @@ web/  → React + TypeScript PWA (Vite): src/pages, src/components, src/sw.ts (s
 schema.sql (fresh DB), migrations/ (changes for the live DB), seed.example.sql (real
 seed.sql is gitignored), requirements.txt (pinned), Dockerfile, .env.example, README.md
 local/ → gitignored private notes: real roster, ids, calendar id, draft env
-scripts/ → set_webhook.sh, backfill_embeddings.py
+scripts/ → set_webhook.sh, backfill_embeddings.py, make_clips.py + record_session.py (Phase 8a)
+room/ → Phase 8a room device: clips.json (Abdo's pre-recorded lines), requirements.txt;
+        generated clips/ and recorded data/ are gitignored
 tests/smoke.py → offline smoke suite (network + DB faked)
 docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
 ```
@@ -162,6 +164,12 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
 - **Spoken replies keep the audio context alive**: `unlockAudio()` starts a silent looping
   source (stopped when the reply plays, or after 2 min) so a slow reply can still autoplay on
   iOS. iOS still won't play if the app was backgrounded or the phone locked meanwhile.
+- **Urgent reminders** (`reminders.urgent/sends/acked_at`): set when the person stresses it
+  (the tool's `urgent` flag, backed by `tools.URGENT_WORDS`). The scheduler re-sends up to 3
+  times, 2 min apart (`claim_reminder` pushes `due_at` forward atomically); any message to Abdo
+  (`turn.handle_turn` → `db.ack_reminders`) or a tap on the notification (service worker →
+  `POST /api/reminders/{id}/ack`) stops it. Push marks them `requireInteraction` + vibrate +
+  a Done action; iOS ignores those, so on iPhone it's the repeats that make them stand out.
 - **Class breaks** (`class_breaks`, `pause_classes` tool, Classes screen): whole days a member's
   classes don't meet; `timetable.busy_on(..., breaks)` skips them; exams still count. The
   timetable itself only changes by re-importing from Quest.

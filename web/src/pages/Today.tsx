@@ -205,7 +205,7 @@ function DayLine({ me, today, brief, exams, toast }: {
     for (const r of (today?.reminders ?? []).filter((r) => dayOf(r.due_at) === day)) {
       out.push({
         key: `r-${r.id}`, at: new Date(r.due_at).getTime(), kind: "reminder", title: r.text,
-        sub: r.set_by ? `Reminder from ${r.set_by}` : "Reminder",
+        sub: `${r.urgent ? "Important reminder" : "Reminder"}${r.set_by ? ` from ${r.set_by}` : ""}`,
         action: <button className="btn btn-quiet btn-small" onClick={() => void cancelReminder(r)}>Cancel</button>,
       });
     }
@@ -400,7 +400,7 @@ function ComingUp({ me, exams, reminders, toast }: {
     })),
     ...reminders.filter((r) => dayOf(r.due_at) > day).map((r) => ({
       key: `r-${r.id}`, day: dayOf(r.due_at), sortTime: hhmm(r.due_at), at: new Date(r.due_at).getTime(), icon: "bell" as IconName, title: r.text,
-      sub: r.set_by ? `Reminder from ${r.set_by}` : "Reminder",
+      sub: `${r.urgent ? "Important reminder" : "Reminder"}${r.set_by ? ` from ${r.set_by}` : ""}`,
       action: <button className="btn btn-quiet btn-small" onClick={() => void cancelReminder(r.id)}>Cancel</button>,
     })),
     ...(cal.data?.events ?? []).filter((e: CalendarEvent) => e.date > day).map((e) => ({

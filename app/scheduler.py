@@ -29,20 +29,33 @@ def _parse_hhmm(value: str) -> time:
         return time(8, 0)
 
 
+# Urgent reminders ("ضروري", "مهم جداً") go out up to URGENT_SENDS times, URGENT_EVERY apart,
+# until the person taps the notification or messages Abdo (db.ack_reminders).
+URGENT_SENDS = 3
+URGENT_EVERY = timedelta(minutes=2)
+
+
 async def send_due_reminders(now: datetime) -> int:
     sent = 0
     for rid in await db.due_reminder_ids(now):
-        row = await db.claim_reminder(rid)
+        row = await db.claim_reminder(rid, now, URGENT_SENDS, URGENT_EVERY)
         if row is None:
             continue  # another instance took it
         member = await db.get_member(row["member_id"])
         if member is None:
             continue
-        late = "(late) " if now - row["due_at"] > LATE_AFTER else ""
+        first = row["sends"] == 1
+        late = "(late) " if first and now - row["due_at"] > LATE_AFTER else ""
         own = row["created_by"] in (None, row["member_id"])
         body = f"{late}{row['text']}" if own else f"{late}From {row['created_by_name']}: {row['text']}"
+        title = "⏰ Reminder"
+        if row["urgent"]:
+            title = "⏰‼️ Important" + ("" if first else f" ({row['sends']}/{URGENT_SENDS})")
+            if not row["done"]:
+                body += "\nI'll remind you again in 2 minutes. Tap this or message me to stop."
         try:
-            await notify.deliver(member, "⏰ Reminder", body, url="/today")
+            await notify.deliver(member, title, body, url="/", urgent=row["urgent"],
+                                 ack=row["id"] if row["urgent"] else None)
             sent += 1
         except Exception:
             log.exception("reminder #%s delivery failed", rid)

@@ -22,6 +22,12 @@ async def handle_turn(*, member, text: str, channel: str, thread: str,
     member: the speaker's members row, or None for an unidentified room speaker.
     speaker_confidence: room speaker-ID score; None when identity came from a login.
     """
+    if member:
+        # Saying anything to Abdo means they've seen their urgent reminder: stop the repeats.
+        try:
+            await db.ack_reminders(member["id"])
+        except Exception:
+            log.exception("couldn't acknowledge reminders for member %s", member["id"])
     try:
         reply = await brain.think(member, thread, text, channel=channel, voice=voice)
     except Exception:

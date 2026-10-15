@@ -5,7 +5,8 @@ short pre-recorded acknowledgement, listens, works out who's talking, and speaks
 Prayer calls, timers and the morning briefing play aloud on their own. Everything runs on a
 Mac first; hardware is bought only after a week of reliable use (8b, ≤ $100).
 
-Status: **planning**. Decisions marked **(decide)** are open.
+Status: **planning; clip library and recorder built** (`room/clips.json`, `scripts/make_clips.py`,
+`scripts/record_session.py`). Decisions confirmed 2026-10-14 are folded in below.
 
 ## 1. How a room turn works
 
@@ -23,8 +24,12 @@ mic (16 kHz mono, always on)
 
 - Speaker ID never authorizes anything sensitive. Below the confidence threshold, the turn is
   "someone in the room" and Abdo asks who it is if the answer depends on it ("whose package?").
-- Mute: a toggle in the app and a spoken "اسكت يا عبده". While muted, the device keeps no
-  audio and only listens for the wake word to unmute (**decide**: or nothing at all).
+- Mute: a toggle in the app and a spoken "اسكت يا عبده". While muted he ignores the normal wake
+  phrase entirely and listens only for a **secret phrase, "افتح يا سمسم"**, which unmutes him
+  with a witty line. It's a second small wake-word model, trained from the same session.
+- **Wake phrase**: "بقولك يا عبده". "يا عبده" on its own should wake him too, **only if** the
+  tests show it doesn't misfire much (a shorter phrase is easier to trigger by accident, from
+  conversation or TV). The session records both, and the false-wake rate decides.
 - Server → device channel (long-poll or SSE) for scheduled audio: prayer calls (Dhuhr to Isha
   aloud, never Fajr), timers, the briefing on "good morning", mute state.
 
@@ -32,41 +37,45 @@ mic (16 kHz mono, always on)
 
 Generated once in Abdo's ElevenLabs voice by a script (`scripts/make_clips.py`), stored as
 files on the device, not in the repo. Any other synthesized line is cached by text hash, so a
-repeat never costs credits. The whole library is a few hundred characters of TTS.
+repeat never costs credits. The whole library is about 550 characters of TTS (roughly 550
+credits once, on multilingual v2).
 
 **Wake acknowledgements** (played the instant the wake word fires; rotate at random, never the
 same one twice in a row):
 
 | The suite's list | Suggested additions |
 |---|---|
-| أولي | نعم يا باشا |
-| أولي يا حبيبي | تحت أمرك |
+| قول لي | نعم يا باشا |
+| قول لي يا حبيبي | تحت أمرك |
 | أيوه يا حبيبي | قول يا معلم |
 | حبيب عبده | سامعك |
 | اؤمرني | عيوني |
 | أفندم | أيوه يا كبير |
 | أيوان! | معاك |
 
-**Personal acknowledgements** (**decide**): "أيوه يا <name>" for each member, generated from the
-`members` table. Speaker ID would have to run on the wake phrase itself (about 1 s of audio),
-which is less reliable than on the full request, so use them only above a high confidence.
+All fourteen are in. **Personal acknowledgements** ("أيوه يا <name>", from the `members` table)
+come later, and only if speaker ID turns out reliable on the wake phrase alone (about 1 s of
+audio). Until then he greets generically and learns who's talking from the full request.
 
-**While thinking** (only if the reply takes over ~2.5 s): "ثانية واحدة", "خليني أشوف", "بص يا سيدي".
+**While thinking** (only if the reply takes over ~2.5 s): "ثانية واحدة", "ثواني", "لحظة كده",
+"لحظات معايا", "خليني أشوف", "بص يا سيدي".
 
 **Errors**: "معلش مسمعتش، تاني؟" (didn't catch it), "النت فاصل شوية" (server unreachable),
 "مش عارف مين بيتكلم" (when it matters who's asking).
 
-**Prayer calls** (Dhuhr, Asr, Maghrib, Isha; Fajr is never aloud): "الظهر يا شباب" style, one
-per prayer, a couple of variants each (**decide** the exact wording).
+**Prayer calls** (Dhuhr, Asr, Maghrib, Isha; Fajr is never aloud): the prayer's name, then who
+he's calling, picked at random: "العصر يا شباب", "العصر يا رجالة", "العصر يا اخواتي",
+"العصر يا نجوم" (MSA prayer names, like the app).
 
-**Timers and reminders**: "الوقت خلص", "الغسيل خلص", plus "فاكر …؟" style lines built per
-reminder through the TTS cache.
+**Timers**: no voice line, just a short chime (generated locally, no credits). Reminders read
+their own text through the TTS cache.
 
-**Mute**: "حاضر، هسكت" / "رجعت".
+**Mute**: "حاضر، هسكت" when muted; the secret phrase gets a witty comeback ("الكنز اتفتح! رجعتلكم",
+"مين نده؟ أنا هنا").
 
 ## 3. The recording session
 
-One sitting, about 15 minutes per person plus 15 minutes of room noise. Everything is recorded
+One sitting, about 20 minutes per person plus 15 minutes of room noise. Everything is recorded
 on the Mac that will run 8a, in the common room, because the model has to learn that mic in
 that room. A person who isn't there (one roommate is away) records later; the models work
 without them and get retrained when they do.
@@ -80,6 +89,8 @@ Per person:
 1. **Wake phrase, 50 takes**, prompted in blocks of 10 so the takes vary:
    normal voice at the table; quiet; loud or calling from the kitchen; fast and slow; from
    across the room (~4 m); facing away; while someone else is talking.
+   Then **"يا عبده" alone, 20 takes**, and the secret unmute phrase **"افتح يا سمسم", 30 takes**,
+   varied the same way.
 2. **Enrollment speech, ~90 s**: read a short mixed Arabic/English prompt list (the way the
    suite talks), then 30 s of free talk from across the room.
 3. **Commands, 15–20**: real requests ("بقولك يا عبده، ضيف لبن للقائمة"). These test the

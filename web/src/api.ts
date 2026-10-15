@@ -70,6 +70,7 @@ export interface Reminder {
   text: string;
   due_at: string;
   set_by: string | null;
+  urgent: boolean;
 }
 
 export interface ProposedClass {

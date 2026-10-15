@@ -124,7 +124,10 @@ CREATE TABLE reminders (
     done        BOOLEAN NOT NULL DEFAULT false,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_by  INTEGER REFERENCES members(id),  -- who asked for it
-    sent_at     TIMESTAMPTZ
+    sent_at     TIMESTAMPTZ,
+    urgent      BOOLEAN NOT NULL DEFAULT false,  -- repeats (up to 3 sends) until seen
+    sends       INTEGER NOT NULL DEFAULT 0,
+    acked_at    TIMESTAMPTZ                      -- tapped, or they messaged Abdo
 );
 CREATE INDEX idx_reminders_due ON reminders (due_at) WHERE NOT done;
 

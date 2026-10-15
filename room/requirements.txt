@@ -1,0 +1,3 @@
+# Phase 8a room-device tools (recorder, later the device client). Not needed by the server.
+sounddevice==0.5.5
+numpy==2.4.6

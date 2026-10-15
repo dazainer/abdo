@@ -1,0 +1,19 @@
+{
+  "_about": "Abdo's pre-recorded lines for the room device (Phase 8a). Generated once in his ElevenLabs voice by scripts/make_clips.py into room/clips/ (gitignored). Each category is a pool; the device picks at random and never repeats the last one. Prayer calls are '<prayer> <addressee>' combinations.",
+  "ack": [
+    "قول لي", "قول لي يا حبيبي", "أيوه يا حبيبي", "حبيب عبده", "اؤمرني", "أفندم", "أيوان!",
+    "نعم يا باشا", "تحت أمرك", "قول يا معلم", "سامعك", "عيوني", "أيوه يا كبير", "معاك"
+  ],
+  "thinking": ["ثانية واحدة", "ثواني", "لحظة كده", "لحظات معايا", "خليني أشوف", "بص يا سيدي"],
+  "error": {
+    "didnt_hear": "معلش مسمعتش، تاني؟",
+    "offline": "النت فاصل شوية، جرب كمان شوية",
+    "who": "مش عارف مين بيتكلم، مين معايا؟"
+  },
+  "mute": ["حاضر، هسكت"],
+  "unmute": ["الكنز اتفتح! رجعتلكم", "مين نده؟ أنا هنا", "رجعت يا جماعة، وحشتوني"],
+  "prayer": {
+    "names": {"dhuhr": "الظهر", "asr": "العصر", "maghrib": "المغرب", "isha": "العشاء"},
+    "addressees": ["يا شباب", "يا رجالة", "يا اخواتي", "يا نجوم"]
+  }
+}

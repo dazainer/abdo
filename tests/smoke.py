@@ -140,10 +140,11 @@ class FakeDB:
         return dict(MEMBERS[member_id]["prefs"])
 
     # reminders
-    async def add_reminder(self, member_id, text, due_at, created_by):
+    async def add_reminder(self, member_id, text, due_at, created_by, urgent=False):
         self._rem_seq = getattr(self, "_rem_seq", 0) + 1
         self.reminders.append({"id": self._rem_seq, "member_id": member_id, "text": text,
-                               "due_at": due_at, "created_by": created_by, "done": False})
+                               "due_at": due_at, "created_by": created_by, "done": False,
+                               "urgent": urgent, "sends": 0, "acked_at": None})
         return self._rem_seq
 
     def _rem_row(self, r):
@@ -167,12 +168,25 @@ class FakeDB:
         return [r["id"] for r in sorted(self.reminders, key=lambda r: r["due_at"])
                 if not r["done"] and r["due_at"] <= now]
 
-    async def claim_reminder(self, reminder_id):
+    async def claim_reminder(self, reminder_id, now, max_sends=3, every=None):
         for r in self.reminders:
-            if r["id"] == reminder_id and not r["done"]:
-                r["done"] = True
-                return self._rem_row(r)
+            if r["id"] == reminder_id and not r["done"] and r["due_at"] <= now:
+                first_due = r.setdefault("first_due", r["due_at"])
+                r["sends"] = r.get("sends", 0) + 1
+                r["done"] = not r.get("urgent") or r["sends"] >= max_sends
+                if not r["done"]:
+                    r["due_at"] = now + every
+                return {**self._rem_row(r), "due_at": first_due}
         return None
+
+    async def ack_reminders(self, member_id, reminder_id=None):
+        out = []
+        for r in self.reminders:
+            if r["member_id"] == member_id and not r["done"] and r.get("urgent") and r.get("sends", 0) > 0 \
+                    and reminder_id in (None, r["id"]):
+                r["done"], r["acked_at"] = True, datetime.now(timezone.utc)
+                out.append(r["id"])
+        return out
 
     async def claim_daily(self, member_id, kind, local_date):
         key = (member_id, kind, local_date)
@@ -458,7 +472,7 @@ for _name in ("get_member_by_telegram_id", "roster_string", "get_member_id_by_na
               "create_session", "session_member", "touch_session", "delete_session",
               "save_push_subscription", "delete_push_subscription", "push_subscriptions_for",
               "all_members", "set_member_prefs", "add_reminder", "upcoming_reminders",
-              "cancel_reminder", "due_reminder_ids", "claim_reminder", "claim_daily",
+              "cancel_reminder", "due_reminder_ids", "claim_reminder", "ack_reminders", "claim_daily",
               "set_status", "clear_status", "current_statuses",
               "add_expense", "add_settlement", "money_ledger", "recent_expenses",
               "recent_settlements", "delete_expense", "delete_settlement",
@@ -1792,7 +1806,7 @@ async def test_scheduler():
     from app import notify, prayer, scheduler, briefing
     sent = []
 
-    async def deliver(member, title, body, url="/", silent=False):
+    async def deliver(member, title, body, url="/", silent=False, urgent=False, ack=None):
         sent.append((member["id"], title, body, silent))
         return "push"
 
@@ -1931,6 +1945,61 @@ async def test_calendar_view_cache():
         calendar_svc.get_events = real
         tools.CALENDAR_CACHE_SECONDS = 0
         tools.invalidate_calendar_cache()
+
+
+async def test_urgent_reminders():
+    print("Scenario: urgent reminders repeat (3 sends max, 2 min apart) until seen")
+    from app import scheduler, notify
+    sent = []
+
+    async def deliver(member, title, body, url="/", silent=False, urgent=False, ack=None):
+        sent.append((member["id"], title, body, urgent, ack))
+        return "push"
+
+    real = notify.deliver
+    notify.deliver = deliver
+    fake.reminders = []
+    try:
+        t0 = datetime(2026, 10, 14, 15, 0, tzinfo=TZ)
+        out = await tools.run_tool("set_reminder", {"text": "call the landlord", "in_minutes": 5, "urgent": True}, 1)
+        check("urgent reminder: the tool says it repeats", "Urgent" in out and fake.reminders[-1]["urgent"] is True)
+        await tools.run_tool("set_reminder", {"text": "ضروري ادفع الإيجار", "in_minutes": 5}, 1)
+        check("an urgent word in the reminder makes it urgent even without the flag", fake.reminders[-1]["urgent"] is True)
+        await tools.run_tool("set_reminder", {"text": "buy bread", "in_minutes": 5}, 1)
+        check("a plain reminder stays plain", fake.reminders[-1]["urgent"] is False)
+
+        id1, id2, id3 = (r["id"] for r in fake.reminders)
+        for r in fake.reminders:
+            r["due_at"] = t0
+        await scheduler.send_due_reminders(t0)
+        check("all three go out once", len(sent) == 3)
+        check("urgent ones are flagged and carry their id for the tap",
+              [(s[3], s[4]) for s in sent] == [(True, id1), (True, id2), (False, None)])
+        check("an urgent first send says it will come back", "again in 2 minutes" in sent[0][2])
+        await scheduler.send_due_reminders(t0 + timedelta(minutes=1))
+        check("not again before 2 minutes", len(sent) == 3)
+        await scheduler.send_due_reminders(t0 + timedelta(minutes=2))
+        check("2 minutes later the urgent ones repeat, numbered",
+              len(sent) == 5 and sent[3][1].endswith("(2/3)") and sent[4][1].endswith("(2/3)"))
+        await db.ack_reminders(1, id2)
+        await scheduler.send_due_reminders(t0 + timedelta(minutes=4))
+        check("a tap stops that one; the other makes its third and last send",
+              len(sent) == 6 and sent[5][4] == id1 and sent[5][1].endswith("(3/3)") and "again" not in sent[5][2])
+        await scheduler.send_due_reminders(t0 + timedelta(minutes=10))
+        check("never more than 3 sends", len(sent) == 6 and all(r["done"] for r in fake.reminders))
+
+        sent.clear()
+        fake.reminders = []
+        await tools.run_tool("set_reminder", {"text": "meds", "in_minutes": 1, "urgent": True}, 1)
+        fake.reminders[-1]["due_at"] = t0
+        await scheduler.send_due_reminders(t0)
+        brain.client = FakeClient(reply_only("تمام"))
+        await turn.handle_turn(member=ZAIN, text="ok ok", channel="telegram", thread="dm:1")
+        await scheduler.send_due_reminders(t0 + timedelta(minutes=5))
+        check("messaging Abdo counts as seeing it: no more repeats", len(sent) == 1 and fake.reminders[-1]["done"])
+    finally:
+        notify.deliver = real
+        fake.reminders = []
 
 
 def test_weather_hours():
@@ -2221,7 +2290,7 @@ async def test_travel_mode():
         # Scheduler: at Montreal's Asr (earlier than Waterloo's), only the traveller gets it.
         sent = []
 
-        async def deliver(member, title, body, url="/", silent=False):
+        async def deliver(member, title, body, url="/", silent=False, urgent=False, ack=None):
             sent.append((member["id"], title, body))
             return "push"
 
@@ -2601,7 +2670,7 @@ async def test_fridge_shopping_polls():
 
     sent = []
 
-    async def deliver(member, title, body, url="/", silent=False):
+    async def deliver(member, title, body, url="/", silent=False, urgent=False, ack=None):
         sent.append((member["id"], title))
         return "push"
 
@@ -2689,7 +2758,7 @@ def test_web_fridge_polls():
     async def capture(chat_id, text, disable_notification=False):
         dms.append(text)
 
-    async def deliver(member, title, body, url="/", silent=False):
+    async def deliver(member, title, body, url="/", silent=False, urgent=False, ack=None):
         return "push"
 
     real_send, real_deliver = telegram.send_message, notify.deliver
@@ -2936,6 +3005,7 @@ async def main():
     await test_notify_deliver()
     await test_scheduler()
     test_weather_hours()
+    await test_urgent_reminders()
     await test_calendar_view_cache()
     test_calendar_no_duplicates()
     await test_briefing_build()

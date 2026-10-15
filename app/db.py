@@ -203,12 +203,12 @@ async def set_member_prefs(member_id: int, updates: dict) -> dict:
 
 # --- reminders -------------------------------------------------------------------
 
-async def add_reminder(member_id: int, text: str, due_at, created_by) -> int:
+async def add_reminder(member_id: int, text: str, due_at, created_by, urgent: bool = False) -> int:
     async with _pool.acquire() as con:
         row = await con.fetchrow(
-            "INSERT INTO reminders (member_id, text, due_at, created_by) "
-            "VALUES ($1, $2, $3, $4) RETURNING id",
-            member_id, text, due_at, created_by,
+            "INSERT INTO reminders (member_id, text, due_at, created_by, urgent) "
+            "VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            member_id, text, due_at, created_by, urgent,
         )
     return row["id"]
 
@@ -217,7 +217,7 @@ async def upcoming_reminders(member_id: int | None = None):
     """Pending reminders (optionally for one member), soonest first."""
     async with _pool.acquire() as con:
         return await con.fetch(
-            "SELECT r.id, r.text, r.due_at, r.member_id, r.created_by, "
+            "SELECT r.id, r.text, r.due_at, r.member_id, r.created_by, r.urgent, "
             "       m.name AS member_name, c.name AS created_by_name "
             "FROM reminders r JOIN members m ON m.id = r.member_id "
             "LEFT JOIN members c ON c.id = r.created_by "
@@ -246,17 +246,36 @@ async def due_reminder_ids(now) -> list[int]:
     return [r["id"] for r in rows]
 
 
-async def claim_reminder(reminder_id: int):
+async def claim_reminder(reminder_id: int, now, max_sends: int = 3, every=None):
     """Atomically take a due reminder for delivery. Only one caller ever gets the row,
-    so two scheduler instances can't both send it."""
+    so two scheduler instances can't both send it. A normal reminder is done after one
+    send; an urgent one is pushed `every` later until it has gone out `max_sends` times.
+    Returns the first due time (for "late"), and `sends` after this one."""
     async with _pool.acquire() as con:
         return await con.fetchrow(
-            "UPDATE reminders r SET done = true, sent_at = now() "
-            "FROM members m WHERE r.id = $1 AND NOT r.done AND m.id = r.member_id "
-            "RETURNING r.id, r.text, r.due_at, r.member_id, r.created_by, "
+            "UPDATE reminders r SET sends = r.sends + 1, sent_at = $2, "
+            "       done = (NOT r.urgent OR r.sends + 1 >= $3), "
+            "       due_at = CASE WHEN r.urgent AND r.sends + 1 < $3 THEN $2 + $4::interval ELSE r.due_at END "
+            "FROM members m, (SELECT due_at AS first_due FROM reminders WHERE id = $1) o "
+            "WHERE r.id = $1 AND NOT r.done AND r.due_at <= $2 AND m.id = r.member_id "
+            "RETURNING r.id, r.text, o.first_due AS due_at, r.member_id, r.created_by, r.urgent, "
+            "          r.sends, r.done, "
             "          (SELECT name FROM members WHERE id = r.created_by) AS created_by_name",
-            reminder_id,
+            reminder_id, now, max_sends, every,
         )
+
+
+async def ack_reminders(member_id: int, reminder_id: int | None = None) -> list[int]:
+    """The person saw it: stop an urgent reminder's repeats (one, or all of theirs that have
+    already gone out at least once)."""
+    async with _pool.acquire() as con:
+        rows = await con.fetch(
+            "UPDATE reminders SET done = true, acked_at = now() "
+            "WHERE member_id = $1 AND NOT done AND urgent AND sends > 0 "
+            "AND ($2::bigint IS NULL OR id = $2) RETURNING id",
+            member_id, reminder_id,
+        )
+    return [r["id"] for r in rows]
 
 
 async def claim_daily(member_id: int, kind: str, local_date) -> bool:

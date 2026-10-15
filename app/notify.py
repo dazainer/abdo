@@ -22,10 +22,14 @@ def prefs_of(member) -> dict:
     return {**PREF_DEFAULTS, **(raw or {})}
 
 
-async def deliver(member, title: str, body: str, url: str = "/", silent: bool = False) -> str:
-    """Returns the channel used: "push", "telegram", or "none"."""
+async def deliver(member, title: str, body: str, url: str = "/", silent: bool = False,
+                  urgent: bool = False, ack: int | None = None) -> str:
+    """Returns the channel used: "push", "telegram", or "none". `urgent` keeps the
+    notification on screen and vibrates (where the phone allows); `ack` is the reminder a
+    tap acknowledges."""
     try:
-        if await push.send_to_member(member["id"], title, body, url, silent=silent) > 0:
+        if await push.send_to_member(member["id"], title, body, url, silent=silent,
+                                     urgent=urgent, ack=ack) > 0:
             return "push"
     except Exception:
         log.exception("push delivery failed for member %s; falling back to Telegram", member["id"])

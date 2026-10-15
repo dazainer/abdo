@@ -31,3 +31,7 @@ web/node_modules/.tmp/
 .impeccable/review/
 .impeccable/build/
 .impeccable/config.local.json
+
+# Phase 8a room device: generated clips (Abdo's voice) and the recording session's audio.
+room/clips/
+room/data/

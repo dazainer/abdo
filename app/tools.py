@@ -257,6 +257,10 @@ TOOLS = [
                 "in_minutes": {"type": "integer", "description": "For timers: minutes from now."},
                 "day": {"type": "string", "description": "The day as said ('today', 'tomorrow', 'Friday', 'next Monday') or an exact date from the reference. Default today."},
                 "time": {"type": "string", "description": "Local time, HH:MM 24h, e.g. '21:00'."},
+                "urgent": {"type": "boolean",
+                           "description": ("True when they stress it matters (ضروري، مهم قوي/جداً، "
+                                           "urgent, don't let me forget): it repeats up to 3 times, 2 "
+                                           "minutes apart, until they tap it or message you.")},
             },
             "required": ["text"],
         },
@@ -1042,6 +1046,16 @@ async def _bus_tool(tool_input: dict) -> str:
     return out + f" Other saved trips: {names}."
 
 
+# A backup for the model's `urgent` flag: these words in the reminder itself make it urgent.
+URGENT_WORDS = ("ضروري", "ضرورى", "مهم قوي", "مهم قوى", "مهم جدا", "مهم جداً", "اوعى تنسى",
+                "متنسانيش", "urgent", "important", "asap", "don't let me forget")
+
+
+def is_urgent(text: str) -> bool:
+    low = (text or "").lower()
+    return any(w in low for w in URGENT_WORDS)
+
+
 def time_of(raw):
     """'19:00' -> time, None -> None. Raises ValueError for junk."""
     if not raw:
@@ -1286,8 +1300,11 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
             due = resolve_due(tool_input.get("in_minutes"), tool_input.get("day"), tool_input.get("time"))
         except TimeError_ as e:
             return f"ERROR: {e}. Ask the user; do NOT guess a time."
-        rid = await db.add_reminder(target_id, text, due, member_id)
-        return f"Reminder #{rid} set for {target}: '{text}', {_when(due)} (local time)."
+        urgent = bool(tool_input.get("urgent")) or is_urgent(text)
+        rid = await db.add_reminder(target_id, text, due, member_id, urgent)
+        return (f"Reminder #{rid} set for {target}: '{text}', {_when(due)} (local time)."
+                + (" Urgent: it repeats up to 3 times, 2 minutes apart, until they tap it or "
+                   "message you." if urgent else ""))
 
     if name == "list_reminders":
         who = None
