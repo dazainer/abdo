@@ -126,7 +126,9 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   numbers, and the model leaves digits in spoken replies despite the voice prompt, so
   `tts.synthesize_mp3` runs every reply through `speak.normalize()` first: digits become
   Egyptian words (or English, by the surrounding text), money stays exact, times read the
-  Egyptian way ("سبعة ونص"), long digit strings are read one by one. STT asks Scribe for no
+  Egyptian way ("سبعة ونص"), long digit strings are read one by one. Lists are joined into one
+  sentence with و first (`speak.flow_lists`, only after a colon or as bullets): a comma list of
+  bare words makes the voice drop its Egyptian accent for Gulf/MSA. STT asks Scribe for no
   audio-event tags and `stt.clean()` drops any left ("[صوت تنفس]" once reached Abdo as a
   message); a tags-only recording counts as nothing heard. ElevenLabs is the biggest running cost: prefer pre-recorded clips and the
   TTS cache (Phase 8) over new synthesis.

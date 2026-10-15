@@ -2977,6 +2977,16 @@ def test_tts_model_routing():
     check("thousands", say("3000 و 1,200") == "تلات تلاف و ألف وميتين")
     check("text without numbers is untouched", say("تمام يا زين") == "تمام يا زين")
 
+    print("Scenario: spoken lists flow as one sentence (bare-word lists lose the accent)")
+    from app.speak import for_speech, flow_lists
+    check("a list after a colon is joined with و",
+          flow_lists("هتحتاج: فرخة، ملوخية، توم، ورق لورا، ورز.") == "هتحتاج: فرخة وملوخية وتوم وورق لورا ورز.")
+    check("ordinary clauses with commas are left alone",
+          flow_lists("أيوه، أنا فاكر، بس استنى شوية، هقولك.") == "أيوه، أنا فاكر، بس استنى شوية، هقولك.")
+    check("two items aren't a list", flow_lists("خد: رز، شعرية") == "خد: رز، شعرية")
+    check("bullet lines become one sentence", flow_lists("هتحتاج:\n- فرخة\n- ملوخية\n- توم\n") == "هتحتاج:\nفرخة وملوخية وتوم.\n")
+    check("for_speech does both", for_speech("هتحتاج: 2 فرخة، ملوخية، توم") == "هتحتاج: اتنين فرخة وملوخية وتوم")
+
     print("Scenario: sound tags in a transcript aren't speech")
     from app.stt import clean
     check("only a breathing tag -> nothing heard", clean("[صوت تنفس].") == "")

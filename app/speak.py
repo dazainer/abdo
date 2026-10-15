@@ -185,3 +185,45 @@ def _number(s: str, lang: str) -> str:
             return f"{ar_words(w)} ونص"
         return f"{ar_words(w)} فاصلة {_digits_one_by_one(frac, 'ar')}"
     return f"{en_words(w)} point {_digits_one_by_one(frac, 'en').replace(',', '')}"
+
+
+# ---- lists -> one spoken sentence -----------------------------------------------------
+# A list of bare items ("فرخة، ملوخية، ثوم، كزبرة") gives the voice nothing to hold its accent
+# on: each word comes out in its default (Gulf/MSA-ish) Arabic. Joined with "و" it's one
+# flowing Egyptian sentence. Only real lists are touched: 3+ comma-separated items after a
+# colon (up to the end of the sentence), and runs of bullet lines. Ordinary clauses with
+# commas ("أيوه، أنا فاكر، بس استنى") are left alone.
+_AFTER_COLON = re.compile(r"(:\s*)([^.؟?!\n]+)")
+_BULLETS = re.compile(r"(?:^[ \t]*[-•*][ \t]+.+(?:\n|$)){2,}", re.MULTILINE)
+
+
+def _join(items: list[str]) -> str:
+    """"فرخة"، "ورق غار"، "ورز" -> "فرخة وورق غار ورز". A word that happens to start with و
+    (ورق) still gets its "and"; only the last item's و is taken as the list's own "and"."""
+    items = [i.strip() for i in items if i.strip()]
+    out = items[0]
+    for k, item in enumerate(items[1:], 1):
+        last = k == len(items) - 1
+        out += f" {item}" if last and item.startswith("و") else f" و{item}"
+    return out
+
+
+def _colon_list(m: re.Match) -> str:
+    items = re.split(r"\s*[،,]\s*", m.group(2))
+    if len(items) < 3:
+        return m.group(0)
+    return m.group(1) + _join(items)
+
+
+def _bullet_list(m: re.Match) -> str:
+    lines = [re.sub(r"^[ \t]*[-•*][ \t]+", "", l) for l in m.group(0).splitlines() if l.strip()]
+    return _join(lines) + ".\n"
+
+
+def flow_lists(text: str) -> str:
+    return _AFTER_COLON.sub(_colon_list, _BULLETS.sub(_bullet_list, text))
+
+
+def for_speech(text: str) -> str:
+    """Everything done to a reply before it's spoken: lists flow, numbers become words."""
+    return normalize(flow_lists(text))

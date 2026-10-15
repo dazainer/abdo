@@ -44,9 +44,10 @@ async def synthesize(text: str) -> bytes:
 
 async def synthesize_mp3(text: str) -> bytes:
     """Egyptian Arabic text -> MP3 bytes (browsers play MP3 natively; no transcode).
-    Numbers are written out as words first (app/speak.py): the model often leaves digits in
-    a spoken reply, and ElevenLabs reads them badly."""
-    text = speak.normalize(text)
+    Prepared first by app/speak.py: numbers written out as words (the model leaves digits in,
+    and ElevenLabs reads them badly) and comma lists joined into a sentence (bare-word lists
+    lose the Egyptian accent)."""
+    text = speak.for_speech(text)
     model = _pick_model(text)
     async with httpx.AsyncClient(timeout=60) as client:
         r = await client.post(
