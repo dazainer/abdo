@@ -279,4 +279,4 @@ The full plan, decisions log, and later-phase outlines are in `docs/ROADMAP.md`.
   scheduler, reminders/timers, morning briefing, prayer-time notifications, statuses, Today tab. **Phase 7b** (`docs/abdo_phase7b_spec.md`, four parts): 7b.1 money + travel mode and 7b.2
   timetables + exams (deployed 2026-10-12), **7b.3 fridge + going shopping + polls, and the
   deterministic Quest parser** (deployed), **7b.4 buses + a declutter pass (current: built, awaiting deploy)**. **Phase 8** → always-on room
-  device (wake word, speaker ID; prove on a Mac before buying hardware). Specs written when each starts.
+  device (wake word, speaker ID; prove on a Mac before buying hardware): **8a planning**, `docs/abdo_phase8a_spec.md`.
