@@ -145,27 +145,31 @@ def cut_take(blocks, threshold: float, wait_s: float = 10):
 
 
 def tidy_clip(audio, threshold: float | None = None):
-    """An already-recorded take with any click before the speech cut off and the edges
-    trimmed to 300 ms; None if there's no real speech in it."""
+    """Clean up a take recorded by the OLD recorder (before key clicks were rejected live).
+    Conservative on purpose: it only cuts a clear key click (a short burst, then a gap, then
+    the speech) off the start, and returns None only when there's no sustained sound at all.
+    Anything else comes back unchanged. (A stricter version deleted real takes recorded with
+    a TV on: the louder background pushed its threshold above quiet speech.)"""
     import numpy as np
     n = len(audio) // BLOCK
     if n == 0:
         return None
     levels = [rms(audio[k * BLOCK:(k + 1) * BLOCK]) for k in range(n)]
     if threshold is None:
-        threshold = max(float(np.percentile(levels, 5)) * NOISE_FACTOR, MIN_THRESHOLD)
+        threshold = max(float(np.percentile(levels, 5)) * 3, MIN_THRESHOLD)
     loud = [lv > threshold for lv in levels]
     start = next((k for k in range(n - START_BLOCKS + 1) if all(loud[k:k + START_BLOCKS])), None)
     if start is None:
-        return None
-    end = max(k for k in range(n) if loud[k])
-    if sum(loud[start:end + 1]) < MIN_SPEECH_BLOCKS:
-        return None
-    # A short burst just before the speech is the key click: start after it.
-    click_end = max((k for k in range(start) if loud[k]), default=-10)
-    cut_from = max(start - PRE_ROLL, click_end + 2, 0)
-    cut_to = min(n, end + 1 + PRE_ROLL)
-    return audio[cut_from * BLOCK:cut_to * BLOCK]
+        return None                         # nothing sustained: a click or noise only
+    before = [k for k in range(start) if loud[k]]
+    if not before:
+        return audio                        # no click: leave it exactly as recorded
+    click_end = before[-1]
+    burst = click_end - before[0] + 1
+    gap = start - click_end - 1
+    if burst > 4 or gap < 5:
+        return audio                        # not clearly a click before the speech
+    return audio[(click_end + 2) * BLOCK:]
 
 
 # ---- live recording ----------------------------------------------------------------------------
@@ -431,7 +435,13 @@ def selftest() -> None:
 
     recorded = np.concatenate([noise(0.2), click, noise(0.6), word, noise(0.8)])
     clean = tidy_clip(recorded)
-    assert clean is not None and abs(rms(clean[:BLOCK * 3]) - 60) < 200, "the click wasn't trimmed off the start"
+    assert clean is not None and len(clean) < len(recorded) and rms(clean[:BLOCK * 3]) < 300, \
+        "the click wasn't trimmed off the start"
+    plain = np.concatenate([noise(0.4), word, noise(0.6)])
+    assert tidy_clip(plain) is plain, "a clean take was changed"
+    loud_room = np.concatenate([(rng.normal(0, 180, int(0.3 * RATE))).astype(np.int16),
+                                (word * 0.3).astype(np.int16), (rng.normal(0, 180, int(0.4 * RATE))).astype(np.int16)])
+    assert tidy_clip(loud_room) is not None, "a take over background noise was deleted"
     assert tidy_clip(np.concatenate([noise(0.3), click, noise(0.5)])) is None, "a click-only take wasn't dropped"
     print(f"selftest ok: {secs:.2f} s take around a 0.80 s word; silence and key clicks give no take; "
           f"--tidy trims a leading click and drops click-only takes")
