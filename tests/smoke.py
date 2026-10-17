@@ -1879,6 +1879,7 @@ async def test_scheduler():
 def test_calendar_no_duplicates():
     print("Scenario: creating the same event twice hands back the first one")
     store = []
+    mode = {"lose_reply": False, "down": False}
 
     class Req:
         def __init__(self, fn):
@@ -1896,6 +1897,11 @@ def test_calendar_no_duplicates():
                 ev = {"id": f"ev{len(store) + 1}", "summary": body["summary"],
                       "start": {"dateTime": body["start"]["dateTime"] + "-04:00"}}
                 store.append(ev)
+                if mode["lose_reply"]:
+                    raise TimeoutError("read timed out")    # Google made it; the reply got lost
+                if mode["down"]:
+                    store.pop()
+                    raise TimeoutError("unreachable")
                 return ev
             return Req(go)
 
@@ -1914,6 +1920,16 @@ def test_calendar_no_duplicates():
         check("same title + same start: the existing event comes back, nothing added",
               b.get("existing") is True and b["id"] == a["id"])
         check("a different time is a different event", not c.get("existing") and len(store) == 2)
+        mode["lose_reply"] = True
+        d = _real_create_event("Padel", "Saturday", "20:00", now=now)
+        check("created but the reply was lost: it's found and counts as done",
+              d["summary"] == "Padel" and len(store) == 3)
+        mode.update(lose_reply=False, down=True)
+        try:
+            _real_create_event("Gym", "Saturday", "09:00", now=now)
+            check("a real failure still fails", False)
+        except calendar_svc.CalendarReadError:
+            check("a real failure still fails", len(store) == 3)
     finally:
         calendar_svc._get_service = real
 
@@ -2828,8 +2844,9 @@ GRT_ROWS = {
         _arrival("7", "North", "101", "15:50", [("101", "15:50"), ("205", "15:57")]),          # already gone
         _arrival("9", "East", "101", "16:01", [("101", "16:01"), ("150", "16:10")]),           # doesn't go there
         _arrival("7", "North", "101", "16:05", [("90", "16:00"), ("101", "16:05"), ("205", "16:12")]),
-        _arrival("7", "North", "101", "16:35", [("101", "16:35"), ("205", "16:42")], kind="REALTIME", delay=180),
+        _arrival("7", "North", "101", "16:35", [("101", "16:35"), ("205", "16:42")], kind="ESTIMATED", delay=180),
         _arrival("7", "North", "101", "16:50", [("101", "16:50"), ("205", "16:57")], kind="CANCELED"),
+        _arrival("7", "North", "101", "16:52", [("101", "16:52"), ("205", "16:59")], kind="PASSED"),
     ],
     # An interlined bus: the 12 ends at stop 500 and the same bus (block B1) leaves as the 8,
     # which reaches stop 205. A different block's 8 from 500 doesn't count for that 12.
@@ -2864,7 +2881,7 @@ async def test_buses():
     try:
         trips = BUS_TRIPS
         deps = await transit.next_for(trips[1], now)
-        check("only departures that reach the stop, in time order, cancelled dropped",
+        check("only departures that reach the stop, in time order, cancelled and passed dropped",
               [(d["route"], d["at"].strftime("%H:%M")) for d in deps] == [("7", "16:05"), ("7", "16:35")])
         check("arrival time at the destination comes from the trip itself",
               deps[0]["arrive"].strftime("%H:%M") == "16:12" and deps[0]["in_min"] == 5)

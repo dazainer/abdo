@@ -8,6 +8,8 @@ import { canRecord, playMp3, prepareToRecord, Recorder, spokenAudio, stopAudio, 
 import { sendText as send, sendVoice as sendVoiceNote, usePending, useSpokenVersion } from "../lib/chatSend";
 import { clock, dayOf, relativeDay } from "../lib/dates";
 
+const CANCEL_SLIDE_PX = 70; // slide this far left off the mic to cancel
+
 export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }) {
   const qc = useQueryClient();
   const latest = useQuery({
@@ -21,6 +23,8 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
   const pending = usePending();       // survives switching tabs (lib/chatSend)
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
+  const [cancelArmed, setCancelArmed] = useState(false);
+  const startX = useRef(0);
   useSpokenVersion();                 // re-render when a reply gains audio
 
   const listRef = useRef<HTMLDivElement>(null);
@@ -106,14 +110,38 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
     void sendVoice(rec);
   }
 
+  // Cancel a voice note before it's sent: slide left off the mic (and let go), tap the
+  // recording bar, or press Esc. Nothing is uploaded or transcribed.
+  async function discard() {
+    await pressStarted.current;
+    const r = recorder.current;
+    recorder.current = null;
+    setRecording(false);
+    setCancelArmed(false);
+    r?.cancel();
+    unlockAudio();
+  }
+
   function onMicDown(e: PointerEvent<HTMLButtonElement>) {
     if (pending) return;
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
+    startX.current = e.clientX;
+    setCancelArmed(false);
     pressStarted.current = startRecording();
   }
 
+  function onMicMove(e: PointerEvent<HTMLButtonElement>) {
+    if (!recording) return;
+    const armed = e.clientX - startX.current < -CANCEL_SLIDE_PX;
+    if (armed !== cancelArmed) setCancelArmed(armed);
+  }
+
   function onMicUp() {
+    if (cancelArmed) {
+      void discard();
+      return;
+    }
     const r = recorder.current;
     if (r?.isRecording()) {
       // Order matters on iPhone: release the mic first, THEN unlock audio, both inside
@@ -129,6 +157,11 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
   }
 
   function onMicKey(e: KeyboardEvent<HTMLButtonElement>) {
+    if (e.key === "Escape" && recording) {
+      e.preventDefault();
+      void discard();
+      return;
+    }
     if ((e.key === " " || e.key === "Enter") && !e.repeat) {
       e.preventDefault();
       if (recording) void finishRecording();
@@ -209,7 +242,10 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
 
       <div className="composer">
         {recording ? (
-          <span className="rec-hint" role="status">Recording… let go to send</span>
+          <button type="button" className={`rec-hint${cancelArmed ? " armed" : ""}`} role="status"
+                  onClick={() => void discard()}>
+            {cancelArmed ? "Let go to cancel" : "Recording… slide left or tap here to cancel"}
+          </button>
         ) : (
           <textarea
             ref={inputRef}
@@ -238,17 +274,18 @@ export function Chat({ me, toast }: { me: Member; toast: (msg: string) => void }
           </button>
         ) : canRecord() ? (
           <button
-            className={`round mic${recording ? " recording" : ""}`}
+            className={`round mic${recording ? " recording" : ""}${cancelArmed ? " cancel-armed" : ""}`}
             aria-label={recording ? "Stop and send voice message" : "Hold to talk"}
             aria-pressed={recording}
             disabled={!!pending && !recording}
             onPointerDown={onMicDown}
             onPointerUp={onMicUp}
+            onPointerMove={onMicMove}
             onPointerCancel={() => { recorder.current?.cancel(); recorder.current = null; setRecording(false); }}
             onKeyDown={onMicKey}
             onContextMenu={(e) => e.preventDefault()}
           >
-            <Icon name="mic" />
+            <Icon name={cancelArmed ? "close" : "mic"} />
           </button>
         ) : null}
       </div>

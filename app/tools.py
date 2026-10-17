@@ -1145,8 +1145,8 @@ async def run_tool(name: str, tool_input: dict, member_id: int | None) -> str:
                     "try again in a moment; do NOT claim it was added.")
         invalidate_calendar_cache()
         if ev.get("existing"):
-            return (f"Already on the calendar: {ev['start']} {ev['summary']} (id: {ev['id']}). "
-                    f"Not added again; tell the user it's already there.")
+            return (f"Done: it's on the calendar ({ev['start']} {ev['summary']}, id: {ev['id']}). It was "
+                    f"already there, so nothing was duplicated. Tell the user it's on the calendar.")
         return f"Created: {ev['start']} {ev['summary']} (id: {ev['id']})."
 
     if name == "update_event":

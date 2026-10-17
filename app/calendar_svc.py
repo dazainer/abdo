@@ -199,25 +199,43 @@ def create_event(summary: str, day: str, time: str, end_time: str | None = None,
     # with this title already starts at this time, hand that one back instead.
     zone = ZoneInfo(tz)
     s_local = datetime.fromisoformat(start).replace(tzinfo=zone)
-    try:
-        same_time = service.events().list(
-            calendarId=settings.google_calendar_id,
-            timeMin=s_local.isoformat(), timeMax=(s_local + timedelta(minutes=1)).isoformat(),
-            singleEvents=True, maxResults=50,
-        ).execute().get("items", [])
-    except Exception as e:
-        raise CalendarReadError(str(e)) from e
-    for e in same_time:
-        e_start = e.get("start", {}).get("dateTime")
-        if (e.get("summary") or "").strip().casefold() == summary.strip().casefold() and e_start \
-                and datetime.fromisoformat(e_start).astimezone(zone) == s_local:
-            return {"id": e["id"], "summary": e.get("summary"), "start": e_start, "existing": True}
+
+    def same_event():
+        try:
+            items = service.events().list(
+                calendarId=settings.google_calendar_id,
+                timeMin=s_local.isoformat(), timeMax=(s_local + timedelta(minutes=1)).isoformat(),
+                singleEvents=True, maxResults=50,
+            ).execute().get("items", [])
+        except Exception as e:
+            raise CalendarReadError(str(e)) from e
+        for e in items:
+            e_start = e.get("start", {}).get("dateTime")
+            if (e.get("summary") or "").strip().casefold() == summary.strip().casefold() and e_start \
+                    and datetime.fromisoformat(e_start).astimezone(zone) == s_local:
+                return {"id": e["id"], "summary": e.get("summary"), "start": e_start}
+        return None
+
+    found = same_event()
+    if found:
+        return {**found, "existing": True}
     body = {
         "summary": summary,
         "start": {"dateTime": start, "timeZone": tz},
         "end": {"dateTime": end, "timeZone": tz},
     }
-    ev = service.events().insert(calendarId=settings.google_calendar_id, body=body).execute()
+    try:
+        ev = service.events().insert(calendarId=settings.google_calendar_id, body=body).execute()
+    except Exception as e:
+        # Google sometimes creates the event and then the reply fails (a timeout). Abdo once
+        # said "the calendar refused it" for an event that was there. Check before failing.
+        try:
+            landed = same_event()
+        except CalendarReadError:
+            landed = None
+        if landed:
+            return landed
+        raise CalendarReadError(str(e)) from e
     return {"id": ev["id"], "summary": ev.get("summary"), "start": ev["start"].get("dateTime")}
 
 

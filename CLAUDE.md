@@ -167,7 +167,9 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   tabs mid-send used to drop the pending bubble while the server kept answering, so a "yes" got
   sent three times and a confirmed event was booked three times. Keep sends in that store. And
   `calendar_svc.create_event` returns an existing event with the same title and start
-  (`"existing": True`) instead of booking it twice.
+  (`"existing": True`, reported to the model as "Done: it's on the calendar", since "not added
+  again" read as a failure) instead of booking it twice. If Google's insert errors, it re-checks
+  before failing: an event once landed while Abdo told the person the calendar refused it.
 - **Spoken replies keep the audio context alive**: `unlockAudio()` starts a silent looping
   source (stopped when the reply plays, or after 2 min) so a slow reply can still autoplay on
   iOS. iOS still won't play if the app was backgrounded or the phone locked meanwhile.
@@ -220,7 +222,9 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   (`GRT_API_URL`), not GTFS: GRT's GTFS host is down and its realtime is off for everyone. It's
   undocumented, so keep it polite (per-trip query, 60 s cache, fetched only on demand) and never
   invent a time when it fails. A trip matches only if the departure's own trip reaches a
-  `to_stop` after the boarding stop. Real stop ids stay in `local/bus_trips.sql`.
+  `to_stop` after the boarding stop. Real stop ids stay in `local/bus_trips.sql`. GRT types:
+  SCHEDULED (all of them while GRT's tracking is down, checked 2026-10-17), ESTIMATED = live,
+  PASSED/SKIPPED dropped; live shows up on its own when GRT restores it.
 - **History is short-term memory, not a to-do list**: `brain._history_messages` keeps the last
   10 turns from the last 3 hours, user turns stamped "[HH:MM] Name:". The persona says answer
   the newest message only. Without this, Abdo re-offered things the person had dropped and

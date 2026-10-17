@@ -56,8 +56,10 @@ class TransitError(Exception):
 def _parse(arrivals: list[dict]) -> list[dict]:
     out = []
     for a in arrivals or []:
+        # GRT's types: SCHEDULED (timetable only, all of them while GRT's tracking is down),
+        # ESTIMATED (live), PASSED (the bus already went by), SKIPPED (won't stop).
         kind = (a.get("type") or "").upper()
-        if "CANCEL" in kind or "SKIP" in kind:
+        if "CANCEL" in kind or "SKIP" in kind or kind == "PASSED":
             continue
         try:
             at = datetime.fromisoformat(a["departure"])
