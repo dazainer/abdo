@@ -5,7 +5,8 @@ short pre-recorded acknowledgement, listens, works out who's talking, and speaks
 Prayer calls, timers and the morning briefing play aloud on their own. Everything runs on a
 Mac first; hardware is bought only after a week of reliable use (8b, ≤ $100).
 
-Status: **planning; clip library and recorder built** (`room/clips.json`, `scripts/make_clips.py`,
+Status: **device v0 running end to end with a key as the wake word** (`room/device.py`,
+`app/channels/room.py`); Zain's recordings done (2026-10-17); clip library and recorder built (`room/clips.json`, `scripts/make_clips.py`,
 `scripts/record_session.py`). Decisions confirmed 2026-10-14 are folded in below.
 
 ## 1. How a room turn works

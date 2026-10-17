@@ -35,3 +35,5 @@ web/node_modules/.tmp/
 # Phase 8a room device: generated clips (Abdo's voice) and the recording session's audio.
 room/clips/
 room/data/
+
+room/device.env

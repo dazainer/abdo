@@ -37,10 +37,11 @@ from app import db, scheduler  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.channels import telegram as telegram_channel  # noqa: E402
 from app.channels import web as web_channel  # noqa: E402
+from app.channels import room as room_channel  # noqa: E402
 
 # Bump this with each deploy-worth change. Surfaced at GET /api/health so we can
 # confirm from outside exactly which code Railway is actually running.
-VERSION = "2026-10-17-cancel-voice-calendar"
+VERSION = "2026-10-17-room-device-v0"
 
 # The built React app (web/dist). Absent in a backend-only checkout: then GET /
 # falls back to the health JSON.
@@ -63,6 +64,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.include_router(telegram_channel.router)
 app.include_router(web_channel.router)
+app.include_router(room_channel.router)
 
 
 @app.get("/api/health")

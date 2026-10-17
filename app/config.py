@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # Buses (Phase 7b.4): the GraphQL API behind GRT's own departures site (stoptimes.grt.ca).
     # Not a documented open-data API, so it's configurable and every failure is reported, never guessed.
     grt_api_url: str = "https://grtivr-prod.regionofwaterloo.9802690.ca/vms/graphql"
+    # Room device (Phase 8a). Without ROOM_DEVICE_TOKEN the room endpoint is off.
+    room_device_token: str | None = None
+    room_speaker_min_confidence: float = 0.75   # below this, a room speaker is "Someone"
 
 
 settings = Settings()

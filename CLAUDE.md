@@ -63,7 +63,7 @@ schema.sql (fresh DB), migrations/ (changes for the live DB), seed.example.sql (
 seed.sql is gitignored), requirements.txt (pinned), Dockerfile, .env.example, README.md
 local/ → gitignored private notes: real roster, ids, calendar id, draft env
 scripts/ → set_webhook.sh, backfill_embeddings.py, make_clips.py + record_session.py (Phase 8a)
-room/ → Phase 8a room device: clips.json (Abdo's pre-recorded lines), requirements.txt;
+room/ → Phase 8a room device: device.py (the client), clips.json (Abdo's lines), requirements.txt;
         generated clips/ and recorded data/ are gitignored
 tests/smoke.py → offline smoke suite (network + DB faked)
 docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
@@ -179,6 +179,12 @@ docs/ → ROADMAP.md, phase specs; docs/egypt/ = archived Egypt-era specs
   (`turn.handle_turn` → `db.ack_reminders`) or a tap on the notification (service worker →
   `POST /api/reminders/{id}/ack`) stops it. Push marks them `requireInteraction` + vibrate +
   a Done action; iOS ignores those, so on iPhone it's the repeats that make them stand out.
+- **Room device** (Phase 8a): `app/channels/room.py` is the room's channel. `POST /api/room/turn`
+  (Bearer `ROOM_DEVICE_TOKEN`; off without it) takes WAV or text + an optional speaker guess, runs
+  handle_turn on the `room` thread (below `ROOM_SPEAKER_MIN_CONFIDENCE` the speaker is "Someone"),
+  returns text + MP3. "اسكت يا عبده" returns action "mute" without calling the brain.
+  `room/device.py` is the Mac client (v0: Enter = wake word, no speaker ID yet); it reuses the
+  recorder's mic and speech cutter. Its config is the gitignored `room/device.env`.
 - **Class breaks** (`class_breaks`, `pause_classes` tool, Classes screen): whole days a member's
   classes don't meet; `timetable.busy_on(..., breaks)` skips them; exams still count. The
   timetable itself only changes by re-importing from Quest.

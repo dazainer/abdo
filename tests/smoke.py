@@ -9,6 +9,7 @@ Test data is deliberately fake (the repo is public): no real passwords, full
 names, ids, or coordinates.
 """
 import asyncio
+import base64
 import hashlib
 import re
 import os
@@ -2972,6 +2973,68 @@ def test_web_buses():
         fake.bus = []
 
 
+def test_room_device():
+    print("Scenario: the room device's endpoint")
+    from fastapi.testclient import TestClient
+    from app import main as app_main, stt, tts
+    from app.channels import room as room_channel
+    real_stt, real_tts = stt.transcribe, tts.synthesize_mp3
+    heard = {"text": "فين مو؟"}
+
+    async def fake_stt(data, filename="x", content_type="audio/wav"):
+        return heard["text"]
+
+    async def fake_tts(text):
+        return b"mp3:" + text.encode()
+
+    stt.transcribe, tts.synthesize_mp3 = fake_stt, fake_tts
+    real_key, real_voice = settings.elevenlabs_api_key, settings.tts_voice_id
+    settings.elevenlabs_api_key, settings.tts_voice_id = "k", "v"
+    try:
+        c = TestClient(app_main.app, base_url="https://testserver")
+        settings.room_device_token = None
+        check("off until a device token is set", c.post("/api/room/turn", data={"text": "hi"}).status_code == 503)
+        settings.room_device_token = "room-test-token"
+        AUTH = {"Authorization": "Bearer room-test-token"}
+        check("wrong token refused", c.post("/api/room/turn", data={"text": "hi"},
+                                            headers={"Authorization": "Bearer nope"}).status_code == 401)
+
+        brain.client = FakeClient(reply_only("مو في الجامعة"))
+        before = len(fake.logged)
+        r = c.post("/api/room/turn", files={"audio": ("a.wav", b"RIFF....", "audio/wav")}, headers=AUTH).json()
+        check("audio in, reply + speech out", r["heard"] and r["action"] == "reply" and r["reply"] == "مو في الجامعة"
+              and base64.b64decode(r["audio"]) == "mp3:مو في الجامعة".encode())
+        rows = fake.logged[before:]
+        check("logged on the room thread as an unidentified speaker",
+              rows and all(x["thread"] == "room" and x["channel"] == "room" for x in rows) and rows[0]["member_id"] is None)
+        sent_text = brain.client.messages.requests[-1]["messages"][-1]["content"]
+        check("an unidentified speaker reaches Abdo as Someone", "Someone: فين مو؟" in str(sent_text))
+
+        brain.client = FakeClient(reply_only("تمام"))
+        before = len(fake.logged)
+        c.post("/api/room/turn", data={"text": "أنا جعان", "speaker": "Zain", "confidence": "0.92"}, headers=AUTH)
+        check("a confident speaker ID becomes that member", fake.logged[before]["member_id"] == 1)
+        before = len(fake.logged)
+        c.post("/api/room/turn", data={"text": "أنا جعان", "speaker": "Zain", "confidence": "0.4"}, headers=AUTH)
+        check("an unsure speaker ID stays Someone", fake.logged[before]["member_id"] is None)
+
+        brain.client = FakeClient(reply_only("should not be called"))
+        n_requests = len(brain.client.messages.requests)
+        r = c.post("/api/room/turn", data={"text": "بقولك يا عبده اسكت"}, headers=AUTH).json()
+        check("'اسكت' mutes the device without asking Abdo",
+              r["action"] == "mute" and len(brain.client.messages.requests) == n_requests)
+        check("mute phrasing", room_channel.is_mute("اسكت يا عبده") and room_channel.is_mute("shh")
+              and not room_channel.is_mute("اسكت الكلام ده ليه"))
+
+        heard["text"] = ""
+        r = c.post("/api/room/turn", files={"audio": ("a.wav", b"RIFF....", "audio/wav")}, headers=AUTH).json()
+        check("nothing heard -> heard=false, no reply", r["heard"] is False and r["reply"] == "")
+    finally:
+        stt.transcribe, tts.synthesize_mp3 = real_stt, real_tts
+        settings.elevenlabs_api_key, settings.tts_voice_id = real_key, real_voice
+        settings.room_device_token = None
+
+
 def test_tts_model_routing():
     print("Scenario: digit-bearing replies route to multilingual_v2")
     from app import tts
@@ -3085,5 +3148,6 @@ if __name__ == "__main__":
     test_web_schedule()
     test_web_fridge_polls()
     test_web_buses()
+    test_room_device()
     print(f"\nTOTAL: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
