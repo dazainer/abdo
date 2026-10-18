@@ -395,7 +395,7 @@ def run(person: str, only: str | None, device) -> None:
                   ("timed", "enroll", "free", "Talk freely from across the room for 30 s.", 30, None),
                   ("takes", "commands", "cmd", "Real requests, one at a time.", len(COMMANDS), COMMANDS)]
     for mode, kind, label, instruction, amount, extra in steps:
-        if only and kind != only:
+        if only and only not in (kind, label):
             continue
         ok = (record_takes(mic, keys, threshold, person, kind, label, instruction, amount, extra) if mode == "takes"
               else record_timed(mic, keys, person, kind, label, instruction, amount, extra))
@@ -472,7 +472,7 @@ def selftest() -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--person", help="a short name for the speaker (lowercase), or 'room' for background audio")
-    ap.add_argument("--only", help="one kind: wake, ya_abdo, secret, enroll, commands (or neg, near for room)")
+    ap.add_argument("--only", help="one kind (wake, ya_abdo, secret, enroll, commands; neg, near for room) or one block (e.g. conversation)")
     ap.add_argument("--device", type=int, help="input device number from --list-devices")
     ap.add_argument("--list-devices", action="store_true")
     ap.add_argument("--tidy", action="store_true", help="clean up takes already recorded for --person")
