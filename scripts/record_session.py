@@ -15,7 +15,8 @@ Hands-free: press Enter once to start a block. After a countdown (long enough to
 the room for the "far" block) a beep means it's listening. Say the phrase, pause, and when it
 beeps the take is saved: say it again. Nothing to press between takes.
 While a block runs, type a letter and Enter:  r = delete the last take,  p (or just Enter) =
-pause,  s = skip the rest of the block,  q = quit. Key clicks, coughs and bumps shorter than a
+pause,  s = skip the rest of the block,  q = quit. During a timed recording: Enter = stop and
+keep it,  r = stop and throw it away (then record it again),  q = keep it and quit. Key clicks, coughs and bumps shorter than a
 word are ignored. Recordings stay on this Mac (room/data/ is gitignored).
 """
 import argparse
@@ -195,6 +196,11 @@ class Keys:
         except queue.Empty:
             return None
 
+    def flush(self) -> None:
+        """Forget anything typed early (during a countdown, or in the previous block)."""
+        while self.poll() is not None:
+            pass
+
 
 class Mic:
     def __init__(self, device=None):
@@ -282,10 +288,12 @@ def record_takes(mic, keys, threshold, person, kind, label, instruction, count, 
     lead = FAR_LEAD_S if label == "far" else LEAD_S
     print(f"\n== {kind}/{label} ({count} takes): {instruction}")
     print(f"   Enter = start (you get {lead} s to get in place), s = skip block, q = quit")
+    keys.flush()
     cmd = keys.wait()
     if cmd in ("q", "s"):
         return cmd == "s"
     countdown(mic, lead)
+    keys.flush()
     n, saved = 0, []
     if prompts:
         print(f"   Say: {prompts[0]}")
@@ -311,6 +319,7 @@ def record_takes(mic, keys, threshold, person, kind, label, instruction, count, 
                 if keys.wait() == "q":
                     return False
                 countdown(mic, lead)
+                keys.flush()
             mic.skip(0.4)  # the key click
             continue
         audio = cut_take(mic.blocks(), threshold, wait_s=LISTEN_SLICE_S)
@@ -334,30 +343,43 @@ def record_takes(mic, keys, threshold, person, kind, label, instruction, count, 
 
 
 def record_timed(mic, keys, person, kind, label, instruction, seconds, lines=None) -> bool:
-    print(f"\n== {kind}/{label} ({seconds} s): {instruction}")
-    for line in lines or []:
-        print(f"   {line}")
-    print("   Enter = start, s = skip, q = quit. While recording, q + Enter stops early.")
-    cmd = keys.wait()
-    if cmd in ("q", "s"):
-        return cmd == "s"
-    countdown(mic, LEAD_S)
+    """One long recording. Returns False if the user quit."""
     import numpy as np
-    folder = DATA / person / kind
-    path = folder / f"{label}-{next_index(folder, label):03d}.wav"
-    chunks, t0 = [], time.monotonic()
-    print(f"   recording {seconds} s…")
-    while time.monotonic() - t0 < seconds:
-        chunks.append(mic.q.get())
-        if keys.poll() == "q":
-            print("   stopped early")
-            break
-    save(path, np.concatenate(chunks))
-    log(person, {"file": str(path.relative_to(DATA)), "kind": kind, "label": label,
-                 "instruction": instruction, "seconds": round(time.monotonic() - t0, 1)})
-    print(f"   saved {path.name}")
-    mic.beep()
-    return True
+    while True:
+        print(f"\n== {kind}/{label} ({seconds} s): {instruction}")
+        for line in lines or []:
+            print(f"   {line}")
+        print("   Enter = start, s = skip, q = quit.")
+        print("   While recording: Enter = stop and keep, r = stop and throw it away, q = keep and quit.")
+        keys.flush()
+        cmd = keys.wait()
+        if cmd in ("q", "s"):
+            return cmd == "s"
+        countdown(mic, LEAD_S)
+        keys.flush()
+        chunks, t0, ending = [], time.monotonic(), None
+        print(f"   recording {seconds} s…")
+        while time.monotonic() - t0 < seconds:
+            chunks.append(mic.q.get())
+            key = keys.poll()
+            if key is None:
+                continue
+            if key in ("", "q", "r"):
+                ending = key
+                break
+            print("   (Enter = stop and keep, r = throw away, q = keep and quit)")
+        if ending == "r":
+            print("   thrown away; nothing saved")
+            continue                        # straight back to this block's prompt
+        folder = DATA / person / kind
+        path = folder / f"{label}-{next_index(folder, label):03d}.wav"
+        save(path, np.concatenate(chunks))
+        took = round(time.monotonic() - t0, 1)
+        log(person, {"file": str(path.relative_to(DATA)), "kind": kind, "label": label,
+                     "instruction": instruction, "seconds": took})
+        print(f"   saved {path.name} ({took} s{'' if ending is None else ', stopped early'})")
+        mic.beep()
+        return ending != "q"
 
 
 def run(person: str, only: str | None, device) -> None:
