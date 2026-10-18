@@ -266,11 +266,26 @@ def log(person: str, record: dict) -> None:
         f.write(json.dumps({**record, "at": datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False) + "\n")
 
 
-def calibrate(mic: Mic) -> float:
-    print("Quiet for a second, measuring the room…")
-    noise = rms(mic.seconds(1.5))
+QUIET_ROOM = 40.0          # a quiet room measures ~5-25; above this someone was probably talking
+
+
+def calibrate(mic: Mic, fixed: float | None = None) -> float:
+    """The speech threshold from 1.5 s of room noise. Talking during the measurement made it
+    too high (normal speech then never registered), so a loud reading is measured again."""
+    if fixed:
+        print(f"Speech threshold set by hand: {fixed:.0f}")
+        return fixed
+    for attempt in range(3):
+        print("Quiet for a second, measuring the room…")
+        noise = rms(mic.seconds(1.5))
+        if noise <= QUIET_ROOM:
+            break
+        print(f"  room level {noise:.0f} is high (someone talking? a fan?). Quiet please, measuring again.")
     threshold = max(noise * NOISE_FACTOR, MIN_THRESHOLD)
     print(f"  room level {noise:.0f}, speech threshold {threshold:.0f}")
+    if threshold > 300:
+        print("  Heads up: that's high, so quiet speech may not register. If takes aren't saving, "
+              "rerun with --threshold 120.")
     return threshold
 
 
@@ -382,10 +397,10 @@ def record_timed(mic, keys, person, kind, label, instruction, seconds, lines=Non
         return ending != "q"
 
 
-def run(person: str, only: str | None, device) -> None:
+def run(person: str, only: str | None, device, fixed_threshold: float | None = None) -> None:
     mic = Mic(device)
     keys = Keys()
-    threshold = calibrate(mic)
+    threshold = calibrate(mic, fixed_threshold)
     if person == "room":
         steps = [("timed", k, l, i, s, None) for k, l, i, s in ROOM_TIMED]
         steps += [("takes", "near", f"near-{n + 1}", f"Say: {p}", 10, None) for n, p in enumerate(NEAR_MISSES)]
@@ -476,6 +491,7 @@ def main() -> None:
     ap.add_argument("--device", type=int, help="input device number from --list-devices")
     ap.add_argument("--list-devices", action="store_true")
     ap.add_argument("--tidy", action="store_true", help="clean up takes already recorded for --person")
+    ap.add_argument("--threshold", type=float, help="set the speech threshold by hand (normal: 80-150)")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -491,7 +507,7 @@ def main() -> None:
         tidy(args.person.strip().lower())
         return
     try:
-        run(args.person.strip().lower(), args.only, args.device)
+        run(args.person.strip().lower(), args.only, args.device, args.threshold)
     except KeyboardInterrupt:
         print("\nStopped. Everything recorded so far is saved.")
 
